@@ -15,6 +15,13 @@
         <div class="text-4xl font-bold ...">数值</div>
     港股页面下方还带一段 "Aug 7, 2026, 11:55 AM HKT" 作为价格时间戳。
 
+    ETF 快照页：https://stockanalysis.com/etf/{ticker}/  (peRatio / aum 等)
+    ETF 历史 P/E 曲线走"指数代理", 因 ETF 组合层面无公开时序:
+        SPYM -> S&P 500        https://www.multpl.com/s-p-500-pe-ratio/table/by-month  (月频, 50+ 年)
+        QQQM -> Nasdaq 100     https://siblisresearch.com/data/nasdaq-100-pe-ratio/    (季频, 免费部分 ~10 期)
+        VUG  -> CRSP US LC Growth: 无公开历史 P/E 源, 曲线保持 N/A
+    这些曲线严格上是"指数 P/E"而非"ETF 组合 P/E", 前端会在图表副标题里明确标注每个 ticker 的数据源。
+
 依赖：仅标准库（urllib + re），无需第三方包。
 """
 
@@ -60,12 +67,30 @@ HKStocks = [
 # (peRatio / aum / nav / expenseRatio / dividendYield / sharesOut / dps / beta 等)。
 # 我们把 peRatio 填入 PE 列, aum 填入 MarketCap 列; 其余对 ETF 语义上不适用的字段
 # (EV/EBIT, EV/EBITDA, PE Fwd, PEG, EBIT, Debt, Cash) 一律保留为 None -> 前端显示 "-"。
-# 历史 P/E / EV-EBIT 曲线对 ETF 语义上不适用, 前端会自动跳过(无 series 数据)。
+#
+# 历史 P/E 曲线走"指数代理": ETF 组合层面无公开时序, 因此改抓 ETF 所跟踪指数的历史 P/E。
+#   SPYM -> S&P 500        (multpl.com, 月频, 50+ 年)
+#   QQQM -> Nasdaq 100     (siblisresearch.com, 季频, 免费部分 ~10 期)
+#   VUG  -> CRSP US LC Growth: 无公开源, 曲线保持 N/A
+# EV/EBIT 时序对 ETF 一律不适用, 保持 N/A。
 ETFs = [
-    "VUG",     # Vanguard Growth ETF
-    "QQQM",    # Invesco NASDAQ-100 ETF
-    "SPYM",    # SPDR Portfolio S&P 500 ETF
+    "VUG",     # Vanguard Growth ETF          (CRSP US LC Growth - no public PE history)
+    "QQQM",    # Invesco NASDAQ-100 ETF       (Nasdaq 100 index proxy)
+    "SPYM",    # SPDR Portfolio S&P 500 ETF   (S&P 500 index proxy)
 ]
+
+# ETF -> 追踪指数的历史 P/E 数据源。None 表示无公开源。
+# key = ETF ticker (upper), value = (label, url, parser_name)
+# label 会显示在前端图表副标题里作为数据源署名; parser_name 用于 _fetch_etf 分发解析器。
+ETF_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
+    "SPYM": ("S&P 500 Index P/E (TTM) · multpl.com",
+             "https://www.multpl.com/s-p-500-pe-ratio/table/by-month",
+             "multpl_spx"),
+    "QQQM": ("Nasdaq 100 Index P/E (TTM) · siblisresearch.com",
+             "https://siblisresearch.com/data/nasdaq-100-pe-ratio/",
+             "siblis_ndx"),
+    "VUG":  None,   # CRSP US Large Cap Growth: no public historical PE source
+}
 
 # ---------- 公司 logo 域名映射 ----------
 # 通过 Google s2 favicon 服务动态加载:
@@ -133,6 +158,9 @@ class Row:
     # 1Y = 约 52 个周频点（本地反算，周收盘价 / 当前 TTM EPS 及 EBIT）
     pe_history_1y: list[tuple[str, float]] | None = None
     ev_ebit_history_1y: list[tuple[str, float]] | None = None
+    # 该 ticker 的 P/E 曲线数据源署名（个股为 "stockanalysis.com"; ETF 为指数代理源；
+    # None 表示无历史序列 -> 前端不显示单独数据源标注）
+    pe_history_source: str | None = None
 
 
 # ---------- URL 构造 ----------
@@ -297,6 +325,100 @@ def parse_etf_snapshot(html: str) -> dict[str, str | None]:
         "dps", "dividendYield", "payoutRatio", "beta", "ch1y",
     )
     return {k: _parse_etf_field(html, k) for k in keys}
+
+
+# ---------- 解析：ETF 追踪指数的历史 P/E（第三方指数估值源） ----------
+#
+# ETF 组合层面并没有公开的历史 P/E 时序，因此我们退而求其次抓 ETF 追踪的**指数**的
+# P/E 历史作为代理。所有源都严格标注在图表副标题里，用户能一眼看出这条曲线是
+# "指数 P/E" 而非"ETF 组合 P/E"。
+
+
+# multpl.com 的 by-month 表页：<table id="datatable"> 里每 <tr> 是 (Date, Value)。
+# Value 单元格可能带 <abbr title="Estimate">†</abbr> 前缀（当月估算值），我们剥掉
+# HTML 标签只保留末尾的数字。Date 形如 "Aug 6, 2026"。
+_PAT_MULTPL_ROW = re.compile(
+    r'<tr[^>]*>\s*<td>([^<]+)</td>\s*<td>(.*?)</td>\s*</tr>',
+    re.DOTALL,
+)
+
+
+def parse_multpl_spx_pe(html: str, limit: int = 60) -> list[tuple[str, float]]:
+    """解析 multpl.com S&P 500 P/E by-month 表，返回 [(date_iso, pe), ...] 旧->新序列。
+
+    - `limit` 是最多返回的**最近**月份数（60 = 最近 5 年月度）。
+    - 数据源：https://www.multpl.com/s-p-500-pe-ratio/table/by-month
+    """
+    # 只在 <table id="datatable"> ... </table> 之间匹配，防止误伤其它表
+    m = re.search(r'<table[^>]*id="datatable"[^>]*>(.*?)</table>', html, re.DOTALL)
+    if not m:
+        return []
+    body = m.group(1)
+
+    out: list[tuple[str, float]] = []
+    for row in _PAT_MULTPL_ROW.finditer(body):
+        date_raw = row.group(1).strip()
+        val_html = row.group(2)
+        val_txt = re.sub(r'<[^>]+>', '', val_html)
+        val_txt = re.sub(r'[†\s]+', ' ', val_txt).strip()
+        try:
+            pe = float(val_txt.split()[-1])
+        except (ValueError, IndexError):
+            continue
+        # 归一化日期："Aug 6, 2026" -> "2026-08"
+        try:
+            d = dt.datetime.strptime(date_raw, "%b %d, %Y")
+        except ValueError:
+            continue
+        # 月度频率：统一用月首 iso 日期作为 label
+        iso = d.strftime("%Y-%m-%d")
+        out.append((iso, pe))
+
+    # multpl 页面本身是新->旧排列，截取最近 `limit` 项后反转为旧->新
+    out = out[:limit]
+    out.reverse()
+    return out
+
+
+# siblisresearch.com 的 Nasdaq 100 页表格结构：<table class="supsystic-table ...">
+# 首行是表头 (Date / NASDAQ 100 Price / P/E (TTM) Ratio / EPS (TTM) / Forward P/E / EPS Fwd / CAPE)
+# 免费版只暴露最近 ~10 个季末点，Date 形如 "6/30/2026"。
+def parse_siblis_ndx_pe(html: str, limit: int = 60) -> list[tuple[str, float]]:
+    """解析 siblisresearch.com Nasdaq-100 P/E 表，返回 [(date_iso, pe), ...] 旧->新序列。
+
+    - 数据源（免费部分）：https://siblisresearch.com/data/nasdaq-100-pe-ratio/
+    - 免费版只有约 10 个季末点，无法完整覆盖 5Y；`limit` 起截断作用（够 3Y 曲线）。
+    """
+    m = re.search(
+        r'<table[^>]*class="[^"]*supsystic-table[^"]*"[^>]*>(.*?)</table>',
+        html,
+        re.DOTALL,
+    )
+    if not m:
+        return []
+    body = m.group(1)
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', body, re.DOTALL)
+    if len(rows) < 2:
+        return []
+
+    out: list[tuple[str, float]] = []
+    for row in rows[1:]:   # 跳过表头
+        cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
+        if len(cells) < 3:
+            continue
+        date_raw = re.sub(r'<[^>]+>|\s+', ' ', cells[0]).strip()
+        pe_raw   = re.sub(r'<[^>]+>|\s+', ' ', cells[2]).strip()
+        try:
+            d = dt.datetime.strptime(date_raw, "%m/%d/%Y")
+            pe = float(pe_raw.replace(",", ""))
+        except ValueError:
+            continue
+        out.append((d.strftime("%Y-%m-%d"), pe))
+
+    # 页面已按新->旧排列，取最近 `limit` 条并反转
+    out = out[:limit]
+    out.reverse()
+    return out
 
 
 # ---------- 解析：ratios 页（TTM 时间序列，如 PE / EV-EBIT） ----------
@@ -591,10 +713,13 @@ def _build_1y_history(
 
 
 def _fetch_etf(ticker: str) -> Row:
-    """ETF 分支: 只请求 /etf/{t}/ 主页, 从内嵌 JSON 抽取 PE / AUM 等 ETF 层面指标。
+    """ETF 分支: 请求 /etf/{t}/ 主页抽取 PE / AUM 等 ETF 层面指标, 并按 ETF 所追踪的
+    指数抓取历史 P/E 时序作为"指数代理"曲线。
 
     stockanalysis 未提供 ETF 的 statistics / ratios / income 页 (全部 404), 且发行商
-    不发布 ETF 组合的历史 P/E 序列, 因此这里不生成任何历史曲线, 前端会自动跳过。
+    不发布 ETF 组合的历史 P/E 序列, 因此历史曲线走第三方指数估值源 (见 ETF_PE_SOURCE)。
+    每个 ticker 的数据源标签会被记录到 Row.pe_history_source, 前端在图表副标题里明确
+    展示"这是指数 P/E 而非 ETF 组合 P/E"。EV/EBIT 时序对 ETF 一律 N/A。
     """
     row: dict[str, str | None] = {CLOSE_COL: None, CLOSE_DATE_COL: None}
     row.update({v: None for v in FIELDS.values()})
@@ -636,6 +761,32 @@ def _fetch_etf(ticker: str) -> Row:
         # _fmt_number 只处理裸数字, fullmatch 失败会原样返回, 因此这里保留 "229.61B"
         # 字符串, 前端表格会原样显示 "229.61B"。
         row[FIELDS["marketcap"]] = aum_raw.lstrip("$").strip() or aum_raw
+
+    # -------- 指数代理: 历史 P/E 时序 --------
+    # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个季末点 (NDX 免费版), 3Y = 5Y 尾部切片。
+    # VUG 追踪 CRSP US LC Growth, 无公开源 -> 保持 None, 前端不显示曲线。
+    src = ETF_PE_SOURCE.get(ticker.upper())
+    if src is not None:
+        label, url, parser_name = src
+        idx_html = _get(url)
+        pe_hist: list[tuple[str, float]] = []
+        if idx_html:
+            if parser_name == "multpl_spx":
+                pe_hist = parse_multpl_spx_pe(idx_html, limit=60)
+            elif parser_name == "siblis_ndx":
+                pe_hist = parse_siblis_ndx_pe(idx_html, limit=60)
+        if pe_hist:
+            r = Row(ticker, row)
+            r.pe_history = pe_hist
+            # 3Y 尾部切片: 月度取 36 点, 季度取 12 点; 数据不足时取全部
+            if parser_name == "multpl_spx":
+                r.pe_history_3y = pe_hist[-36:] if len(pe_hist) > 36 else list(pe_hist)
+            else:
+                r.pe_history_3y = pe_hist[-12:] if len(pe_hist) > 12 else list(pe_hist)
+            r.pe_history_source = label
+            return r
+        else:
+            print(f"  .. {ticker}: index PE history unavailable ({url})", file=sys.stderr)
 
     return Row(ticker, row)
 
@@ -1334,7 +1485,7 @@ _HTML_TEMPLATE = """<!doctype html>
     <div class="chart-head">
       <div>
         <div class="chart-title" id="chartTitle">P/E (TTM) History</div>
-        <div class="chart-sub"   id="chartSub">Quarterly · source stockanalysis.com</div>
+        <div class="chart-sub"   id="chartSub">Click a ticker to load its history</div>
       </div>
       <button type="button" class="chart-close" id="chartClose" title="Close">×</button>
     </div>
@@ -1367,6 +1518,10 @@ _HTML_TEMPLATE = """<!doctype html>
       '3y': {{ pe: {pe_3y_json}, evebit: {ev_3y_json} }},
       '5y': {{ pe: {pe_5y_json}, evebit: {ev_5y_json} }}
     }};
+    // ticker -> P/E 历史曲线的数据源标签（例:"stockanalysis.com · quarterly TTM"、
+    //   "S&P 500 Index P/E (TTM) · multpl.com"）。未收录的 ticker 表示无历史序列。
+    //   render() 会按当前选中的 ticker 集合动态拼接到图表副标题，做到"每条曲线都有出处"。
+    const PE_SOURCE = {pe_source_json};
     // ticker -> 公司主页域名，用于 Google s2 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {logo_map_json};
     // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
@@ -1462,17 +1617,67 @@ _HTML_TEMPLATE = """<!doctype html>
         const meta    = METRIC_META[currentMetric];
         const rmeta   = RANGE_META[currentRange];
         titleE.textContent = meta.title;
-        subE.textContent = `${{rmeta.label}} · ${{rmeta.freq}} · source stockanalysis.com`;
 
-        // 1Y 本地反算时展示公式说明
+        // 副标题：range · freq · 各 ticker 的数据源。曲线所需的数据源可能不同
+        // （个股走 stockanalysis.com、ETF 走 multpl / siblis 指数代理），因此按当前
+        // 选中且实际有序列的 ticker 汇总去重，让"每条曲线都有出处"这件事在 UI 上
+        // 直接看得见。P/E metric 才展示数据源来源（EV/EBIT 数据源统一，无需分别标）。
+        let subText = `${{rmeta.label}} · ${{rmeta.freq}}`;
+        if (currentMetric === 'pe' && selected.size > 0) {{
+          const seen = new Set();
+          const parts = [];
+          for (const t of selected.keys()) {{
+            const src = PE_SOURCE[t];
+            if (!src) continue;
+            if (seen.has(src)) continue;
+            seen.add(src);
+            // 同一 source 被多个 ticker 共用时，用 "AAPL,MSFT: source" 前缀标出归属
+            const owners = Array.from(selected.keys()).filter(x => PE_SOURCE[x] === src);
+            parts.push(`${{owners.join(',')}}: ${{src}}`);
+          }}
+          if (parts.length) subText += ` · ${{parts.join(' | ')}}`;
+        }} else if (currentMetric === 'evebit') {{
+          subText += ` · source stockanalysis.com`;
+        }}
+        subE.textContent = subText;
+
+        // 说明条：合并两类提示——1Y 本地反算公式 + ETF 指数代理 / EV/EBIT N/A 提醒
+        const notes = [];
         if (rmeta.computed) {{
-          formulaE.classList.add('show');
-          formulaE.innerHTML =
+          notes.push(
             `<span class="cf-tag">COMPUTED</span>` +
             `<b>1Y 周频为本地反算</b>，非站点直接提供。` +
             `采用史周收盘价 + 今日 statistics 快照（EPS<sub>TTM</sub>、EBIT<sub>TTM</sub>、股本、总债务、现金）。` +
             `历史基本面实际随时间变化，因此早期点会存在偏差，仅供参考。<br/>` +
-            `<code>${{FORMULA_HTML[currentMetric]}}</code>`;
+            `<code>${{FORMULA_HTML[currentMetric]}}</code>`
+          );
+        }}
+        // 选中的 ETF 用的是指数代理 P/E，明确告知用户
+        const etfSelected = Array.from(selected.keys()).filter(t => PE_SOURCE[t] && PE_SOURCE[t].indexOf('Index') >= 0);
+        if (currentMetric === 'pe' && etfSelected.length > 0) {{
+          notes.push(
+            `<span class="cf-tag">INDEX PROXY</span>` +
+            `<b>${{etfSelected.join(', ')}}</b> 展示的是所追踪指数的历史 P/E（TTM），` +
+            `并非 ETF 组合本身的加权 P/E——ETF 组合层面没有公开的历史 P/E 时序，` +
+            `因此退而求其次以指数估值作为代理。当前快照的 P/E 仍是 ETF 组合值。`
+          );
+        }}
+        // 选中的 ETF 但当前 metric 是 EV/EBIT：ETF 语义上不适用
+        const etfInEvEbit = currentMetric === 'evebit' && Array.from(selected.keys()).some(t => {{
+          const src = PE_SOURCE[t];
+          const snap = SNAPSHOT[t];
+          // 判定为 ETF：要么有指数代理 label、要么 snapshot 里缺 EBIT（个股一般都有）
+          return (src && src.indexOf('Index') >= 0) || (snap && !snap.ebit);
+        }});
+        if (etfInEvEbit) {{
+          notes.push(
+            `<span class="cf-tag">N/A FOR ETF</span>` +
+            `EV/EBIT 时序对 ETF 不适用（组合层面无 EBIT / Debt / Cash 概念，指数源亦不提供）。`
+          );
+        }}
+        if (notes.length) {{
+          formulaE.classList.add('show');
+          formulaE.innerHTML = notes.join('<br/><br/>');
         }} else {{
           formulaE.classList.remove('show');
           formulaE.innerHTML = '';
@@ -1751,6 +1956,8 @@ def build_html_report(
     ev_3y: dict[str, list[list]] = {}
     pe_1y: dict[str, list[list]] = {}
     ev_1y: dict[str, list[list]] = {}
+    # ticker -> P/E 历史数据源标签（前端图表副标题按选中 ticker 拼接显示）
+    pe_source: dict[str, str] = {}
     for _title, rows, _cur in sections:
         for r in rows:
             if r.pe_history:
@@ -1765,12 +1972,18 @@ def build_html_report(
                 pe_1y[r.symbol] = [[d, v] for d, v in r.pe_history_1y]
             if r.ev_ebit_history_1y:
                 ev_1y[r.symbol] = [[d, v] for d, v in r.ev_ebit_history_1y]
+            # 个股历史均来自 stockanalysis.com/financials/ratios；ETF 则已在 _fetch_etf 里设好专用 label。
+            if r.pe_history_source:
+                pe_source[r.symbol] = r.pe_history_source
+            elif r.pe_history:
+                pe_source[r.symbol] = "stockanalysis.com · quarterly TTM"
     pe_5y_json = json.dumps(pe_5y, ensure_ascii=False)
     ev_5y_json = json.dumps(ev_5y, ensure_ascii=False)
     pe_3y_json = json.dumps(pe_3y, ensure_ascii=False)
     ev_3y_json = json.dumps(ev_3y, ensure_ascii=False)
     pe_1y_json = json.dumps(pe_1y, ensure_ascii=False)
     ev_1y_json = json.dumps(ev_1y, ensure_ascii=False)
+    pe_source_json = json.dumps(pe_source, ensure_ascii=False)
     logo_map_json = json.dumps(LOGO_DOMAIN, ensure_ascii=False)
 
     # 每个 ticker 的当前快照，供前端在均值虚线右端反推"若估值回到均值时的隐含股价"
@@ -1807,6 +2020,7 @@ def build_html_report(
         ev_3y_json=ev_3y_json,
         pe_1y_json=pe_1y_json,
         ev_1y_json=ev_1y_json,
+        pe_source_json=pe_source_json,
         logo_map_json=logo_map_json,
         snapshot_json=snapshot_json,
         favicon_link=_favicon_link_tag(),
