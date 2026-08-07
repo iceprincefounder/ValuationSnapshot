@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Valuation Snapshot</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAA7AAAAOwBeShxvQAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAVPSURBVFiFxZZbbFRVFIa/tc/pzHQGWxhaWqYXyi0qImjEC1hlwAuIJSaaaLCi0QQfjLxp2sREhhdt5cnE+KAxRvCaGDXRNhjFchMNoEYxYsBi7XWgtKW0tJ2Zc/b2YTownZZ2QNH1dM7e/97/t9daJ2fD/xxyJTdf/35NpTZye/pYQ3Vdffq7fSUBjCt3I2ZLxvAYAHVFART7gfbJNFcUQDSVQOlkmqxLsH57TblWvOUY6/EvN77UNZW+akdtxIym34iJiJHIhJCXYN4EzAOOILKyobquL1vzxupXtl5MO2UJMswBrsfohnu3Pxf4p+ZTAmSYtyJyD9AFstyj7A/DTZExJbxU80kBJjBf1VBd97WBNUCfwVQFOobfxiTLeDnmcJEeWPtBbYXlmiagAmhxLVm1c0NdS2p+3Xs1d4phJ5ArmG0YNZQyFyNbv9hYF8mESh+fNAPrt9eUW67ZNWreishd6eYAjdX1e0XxCOAY5Pn0k09kMlmMAbhI2k9MtPCLR+s/B54ETMo827Snx5gmSuSIslyjmCDtE0XDY/XvrttRO1tBoOGx+q0A7+xbFBHYAnCgu2NP21Aoe4CdG+pa1n5Quyr1nM0JGjfWbctGlxXARMZ9TcvCWhMGUIrdM1Yd3v1PDKcEyAytCctok2ktAOMAenYti6Q0h3V8T1S5/x5AeiSOtYSjL9nJpjNsnf2CE7mU9VkDtFVVhUGFAdyTpyrs4sQ4jTlZWtFWtSQymeayAUCFxYxeJPrtPWRubiDeHVrmOM4TAOZo4o9cJwrAQH5eScdVyd9EgnjBZQEMOolwQhssIK8rVmwvcHG7+9Dd1jWx9hsBcPOsOWrhYBK3QErRBoBC21Macz0A9KjBOS1OHJ/tyQ6g95ub7hfl3aLjvTeJ0sS7fbid/aWJw3/ybc4dfDr7qYL2khAOFuWcCmwoamCF/wiAD2YDsBh8i4klN5cznkNm8oY8D3Bmz/KXNd5nzYzbpomvBEThmdUOxfv9X52spL71YSrnzreuzfMjBqKDIXmto5BfevayydqhxXYUwIht6ZhYCuCsydVqiiuHnTq5xrOZ4ocCWF6IJeuJfy54Q7LSfMxe/RdnY2X8eqyHc/EEi4qCVF69kH1/wNL8ZrXc/2tyCSj/6OZ5A0bFXAdjRlBKlU8EIAB9u1ccNMGVN+OfC7Eu6N4JxkDhGvCVwFAzx7pa2Pz7JoKz8rghVMjMgA+Ajv5Bejp/jL+a+0IUYFBUkYDXozU9cfRBHVKnfdOZYZsTD07vfOO8s6IxuPKHIzaA0Ykl+Ebvju4QWLngLbuA6SujPOcAiZEElgiu0eenCgK5/OQWeSSYXw5wVdrpClu7VJVqxppZDDAPQ11qTp+LB4GaC02YKpUVgNwKGG4BX1FKjsIFESylsOTCT1QpwRJtTG9/W2rMaFNoHHLdXh/o+KDy9/eOS70iCqM9IFbOz2a47Rb888BoGPgNRIE1Lake6eTPRBm2x2bYccZkoHtgmLmeqKQykH4WE+9ClEyTYP60TAA9Ei8+D6DdkRelb/8neEv8+ELJ2gN4i0GPMNJziHd7HmbxwhCtZ86y70Qni4qCzC+YztHOdrPZ/uy06e0fvuwMzFz945e9Tbe+TvSjZwhW+vGGwAgMNUPfd+d2nV7Sf6B9TnHlrBy1ekEZInBqYJj9x49zX2C3rJjeXAj546qZTQbGfKS93yxbJ5Zni9HOdRhtG+X5RXQ8Elx9uPHWN/c+4PVZtQnHLEXQM2Wg/enYa/o29/v+zM3RUm4cVeQO+hMisag1Ix7NlKiAZ1vB412fjFv7X8ff6cpmpTxD0C8AAAAASUVORK5CYII=" />
+<style>
+  :root {
+    --bg: #0b1020;
+    --bg-2: #121a33;
+    --panel: #151d38;
+    --panel-2: #1b2547;
+    --border: #263263;
+    --text: #e6ebff;
+    --muted: #9aa4c7;
+    --accent: #6ea8ff;
+    --good: #22c55e;
+    --good-bg: rgba(34,197,94,.12);
+    --mid:  #f59e0b;
+    --mid-bg: rgba(245,158,11,.12);
+    --bad:  #ef4444;
+    --bad-bg: rgba(239,68,68,.12);
+    --shadow: 0 8px 30px rgba(0,0,0,.35);
+    --mono: ui-monospace,"SF Mono",Consolas,"JetBrains Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f7fb;
+      --bg-2: #eef2f9;
+      --panel: #ffffff;
+      --panel-2: #f8fafc;
+      --border: #e5e9f2;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #2563eb;
+      --good-bg: rgba(34,197,94,.14);
+      --mid-bg:  rgba(245,158,11,.14);
+      --bad-bg:  rgba(239,68,68,.12);
+      --shadow: 0 6px 24px rgba(15,23,42,.08);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(1200px 600px at 90% -10%, rgba(110,168,255,.15), transparent 60%),
+      radial-gradient(900px 500px at -10% 10%, rgba(34,197,94,.10), transparent 60%),
+      linear-gradient(180deg, var(--bg), var(--bg-2));
+    min-height: 100vh;
+    padding: 40px 24px 80px;
+  }
+
+  .wrap { max-width: 1280px; margin: 0 auto; }
+
+  header.top {
+    display:flex; align-items:flex-end; justify-content:space-between; gap:16px;
+    margin-bottom: 28px;
+  }
+  header.top h1 {
+    margin: 0; font-size: 30px; letter-spacing:-.02em;
+    background: linear-gradient(90deg, var(--accent), #a78bfa);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header.top .sub {
+    color: var(--muted); font-size: 13px; margin-top: 6px;
+  }
+  header.top .sub a { color: var(--accent); text-decoration: none; }
+  header.top .sub a:hover { text-decoration: underline; }
+
+  .legend {
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+    color: var(--muted); font-size: 12px;
+  }
+  .legend .chip {
+    display:inline-flex; align-items:center; gap:6px;
+    padding: 4px 10px; border-radius:999px; border:1px solid var(--border);
+    background: var(--panel);
+  }
+  .legend .dot { width:8px; height:8px; border-radius:50%; }
+  .dot.good { background: var(--good); }
+  .dot.mid  { background: var(--mid); }
+  .dot.bad  { background: var(--bad); }
+
+  section.market {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    margin-bottom: 28px;
+  }
+  .market-head {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--panel-2), transparent);
+  }
+  .market-head h2 {
+    margin:0; font-size:18px; letter-spacing:-.01em;
+    display:flex; align-items:center; gap:10px;
+  }
+  .pill {
+    font-size: 11px; color: var(--muted);
+    padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel-2);
+  }
+
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    font-size: 13.5px;
+  }
+  th, td {
+    padding: 12px 14px; text-align: center; white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+  }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--panel-2);
+    color: var(--muted); font-weight: 600; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  tbody tr:hover td { background: var(--panel-2); }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* 所有列（包括标题 th 与数值单元格）统一居中；保留 tabular-nums 以保证数字列宽稳定 */
+  td.num, td.close, td.metric, td.money .val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.asof { color: var(--muted); font-size: 12.5px; }
+  td.close { font-weight: 600; }
+  td.na { color: var(--muted); }
+  .tk-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 8px;
+    background: linear-gradient(180deg, rgba(110,168,255,.16), rgba(110,168,255,.06));
+    border: 1px solid rgba(110,168,255,.35);
+    color: var(--text); font-weight: 700; letter-spacing:.02em;
+    font-family: var(--mono); font-size: 12.5px;
+    cursor: pointer; user-select: none;
+    transition: transform .08s ease, box-shadow .15s ease, border-color .15s ease;
+  }
+  .tk-badge .tk-logo {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: #fff;              /* 透明/深底图标在暗色背景上不至于消失 */
+    object-fit: contain;
+    flex: 0 0 auto;
+  }
+  .tk-badge .tk-sym { line-height: 1; }
+  .tk-badge:hover {
+    transform: translateY(-1px);
+    border-color: var(--accent);
+    box-shadow: 0 4px 14px rgba(110,168,255,.25);
+  }
+  .tk-badge.selected {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--sel) 32%, transparent), color-mix(in srgb, var(--sel) 10%, transparent));
+    border-color: var(--sel);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--sel) 35%, transparent);
+    color: var(--sel);
+  }
+
+  /* -------- Right-side floating chart panel -------- */
+  .chart-panel {
+    position: fixed;
+    right: 24px; top: 90px;
+    width: min(560px, 42vw);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    z-index: 20;
+    transform: translateX(calc(100% + 40px));
+    opacity: 0;
+    pointer-events: none;
+    transition: transform .28s ease, opacity .2s ease;
+    overflow: hidden;
+  }
+  .chart-panel.open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .chart-head {
+    display:flex; justify-content:space-between; align-items:center;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--panel-2), transparent);
+  }
+  .chart-title { font-size: 15px; font-weight: 700; letter-spacing:-.01em; }
+  .chart-sub   { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .chart-close {
+    width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--muted); cursor: pointer;
+    font-size: 20px; line-height: 1; padding: 0;
+  }
+  .chart-close:hover { color: var(--text); border-color: var(--accent); }
+
+  .chart-selected {
+    display:flex; flex-wrap:wrap; gap:6px; padding: 10px 18px 0;
+  }
+  .sel-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 10px; border-radius: 999px;
+    border: 1px solid var(--border); font-size: 11px; font-weight: 700;
+    font-family: var(--mono); background: var(--panel-2);
+  }
+  .sel-chip .tk-logo {
+    width: 14px; height: 14px; border-radius: 3px;
+    background: #fff; object-fit: contain; flex: 0 0 auto;
+  }
+
+  .chart-body { padding: 8px 6px 4px; min-height: 200px; }
+  .chart-empty {
+    color: var(--muted); font-size: 13px; text-align:center;
+    padding: 60px 20px; line-height: 1.6;
+  }
+  .chart-body svg .grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; }
+    .chart-body svg .axis { stroke: var(--border); stroke-width: 1; }
+    .chart-body svg .axis-lbl { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); }
+    .chart-body svg .last-val  { font-size: 11px; font-family: var(--mono); font-weight: 700; }
+    .chart-body svg .pt-lbl    { font-size: 9.5px; font-family: var(--mono); font-weight: 600; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+    .chart-body svg .avg-line  { stroke-dasharray: 6 4; stroke-width: 1.4; opacity: 0.65; fill: none; }
+    .chart-body svg .avg-lbl   { font-size: 10px; font-family: var(--mono); font-weight: 700; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; opacity: 0.9; }
+    .chart-body svg .avg-imp   { font-size: 10.5px; font-family: var(--mono); font-weight: 700; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+    .chart-body svg .avg-cur   { font-size: 9.5px;  font-family: var(--mono); font-weight: 600; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; opacity: 0.75; }
+
+  .chart-legend {
+    display:flex; flex-direction:column; gap:6px;
+    padding: 8px 18px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .lg-item {
+    display:flex; flex-wrap: wrap; align-items:center; gap:10px;
+    font-size: 12px;
+  }
+  .lg-swatch { width: 12px; height: 3px; border-radius: 2px; }
+  .lg-tk {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-weight: 700; min-width: 60px;
+  }
+  .lg-tk .tk-logo {
+    width: 14px; height: 14px; border-radius: 3px;
+    background: #fff; object-fit: contain; flex: 0 0 auto;
+  }
+  .lg-stat { color: var(--muted); font-family: var(--mono); }
+  .lg-stat em { color: var(--muted); font-style: normal; opacity: .65; margin-right: 3px; }
+
+  /* Tab 切换 (P/E ↔ EV/EBIT) */
+  .chart-tabs {
+    display:flex; gap:4px; padding: 10px 18px 0;
+  }
+  .chart-tab {
+    flex: 1;
+    padding: 7px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 12px; font-weight: 700; letter-spacing: .02em;
+    font-family: var(--mono);
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .chart-tab:hover { color: var(--text); border-color: var(--accent); }
+  .chart-tab.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent) inset;
+  }
+
+  /* Range 切换 (1Y / 3Y / 5Y)：与 metric tab 同行，靠右站 */
+  .chart-toolbar {
+    display:flex; align-items:center; gap:10px; padding: 10px 18px 0;
+  }
+  .chart-toolbar .chart-tabs { flex: 1; padding: 0; }
+  .range-group {
+    display:inline-flex; padding: 3px; gap: 2px;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel-2);
+  }
+  .range-btn {
+    padding: 4px 10px;
+    border: 0; border-radius: 7px;
+    background: transparent; color: var(--muted);
+    font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    font-family: var(--mono);
+    cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+  }
+  .range-btn:hover { color: var(--text); }
+  .range-btn.active {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  /* 1Y 本地反算的公式提示条（仅当 range=1Y 时显示） */
+  .chart-formula {
+    display: none;
+    margin: 0 18px 14px;
+    padding: 10px 12px;
+    border: 1px dashed color-mix(in srgb, var(--mid) 55%, var(--border));
+    background: color-mix(in srgb, var(--mid) 8%, transparent);
+    border-radius: 10px;
+    font-size: 11.5px; line-height: 1.55;
+    color: var(--muted);
+  }
+  .chart-formula.show { display: block; }
+  .chart-formula .cf-tag {
+    display: inline-block; margin-right: 8px;
+    padding: 1px 7px; border-radius: 999px;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+    color: var(--mid); background: color-mix(in srgb, var(--mid) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--mid) 40%, transparent);
+  }
+  .chart-formula code {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--text);
+    padding: 1px 4px; border-radius: 4px;
+    background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+  }
+
+  @media (max-width: 900px) {
+    .chart-panel {
+      right: 12px; left: 12px; top: auto; bottom: 12px;
+      width: auto; max-height: 65vh; overflow-y: auto;
+      transform: translateY(calc(100% + 40px));
+    }
+    .chart-panel.open { transform: translateY(0); }
+  }
+
+  .head-meta {
+    display:flex; align-items:center; gap:8px;
+  }
+  .cur-badge {
+    display:inline-flex; align-items:center;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; letter-spacing: .06em;
+    font-family: var(--mono);
+  }
+  .cur-usd { background: rgba(34,197,94,.14);  color:#22c55e; border:1px solid rgba(34,197,94,.4); }
+  .cur-hkd { background: rgba(110,168,255,.14); color:#6ea8ff; border:1px solid rgba(110,168,255,.4); }
+
+  td.metric.good { background: var(--good-bg); color: var(--good); font-weight: 600; }
+  td.metric.mid  { background: var(--mid-bg);  color: var(--mid);  font-weight: 600; }
+  td.metric.bad  { background: var(--bad-bg);  color: var(--bad);  font-weight: 600; }
+
+  .title-row {
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  }
+  .gen-badge {
+    display:inline-flex; align-items:center; gap:6px;
+    padding: 5px 12px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--muted); font-family: var(--mono);
+    font-size: 12px; letter-spacing: .02em;
+    box-shadow: var(--shadow);
+  }
+  .gen-badge svg { color: var(--accent); }
+
+  footer {
+    margin-top: 20px; color: var(--muted); font-size: 12px; text-align:center;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <div class="title-row">
+          <h1>Valuation Snapshot</h1>
+          <span class="gen-badge" title="Report generation time">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            2026-08-07 16:57:06
+          </span>
+        </div>
+        <div class="sub">
+          Data source:
+          <a href="https://stockanalysis.com/" target="_blank" rel="noreferrer">stockanalysis.com</a>
+          · Values taken <b>as-is</b>, no local computation
+        </div>
+      </div>
+      <div class="legend">
+        <span class="chip"><span class="dot good"></span>cheap / strong</span>
+        <span class="chip"><span class="dot mid"></span>fair</span>
+        <span class="chip"><span class="dot bad"></span>rich / weak</span>
+      </div>
+    </header>
+
+    
+    <section class="market">
+      <header class="market-head">
+        <h2>ETFs</h2>
+        <div class="head-meta">
+          <span class="cur-badge cur-usd">USD</span>
+          <span class="pill">3 tickers</span>
+        </div>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ticker</th><th>Close</th><th>As&nbsp;Of</th><th>Market Cap</th><th>EV</th><th>Total Debt</th><th>Cash&nbsp;+&nbsp;STI</th><th>EBIT&nbsp;(TTM)</th><th>EV&nbsp;/&nbsp;EBIT</th><th>EV&nbsp;/&nbsp;EBITDA</th><th>P/E&nbsp;(TTM)</th><th>P/E&nbsp;(Fwd)</th><th>PEG</th></tr></thead>
+          <tbody>
+            <tr data-ticker="VUG"><td class="ticker"><button type="button" class="tk-badge" data-ticker="VUG" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="vanguard.com" src="https://www.google.com/s2/favicons?domain=vanguard.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">VUG</span></button></td><td class="num close">88.68</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num">$229.61B</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric bad">36.65</td><td class="num na">—</td><td class="num na">—</td></tr><tr data-ticker="QQQM"><td class="ticker"><button type="button" class="tk-badge" data-ticker="QQQM" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="invesco.com" src="https://www.google.com/s2/favicons?domain=invesco.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">QQQM</span></button></td><td class="num close">294.26</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num">$97.11B</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric bad">33.95</td><td class="num na">—</td><td class="num na">—</td></tr><tr data-ticker="SPYM"><td class="ticker"><button type="button" class="tk-badge" data-ticker="SPYM" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="ssga.com" src="https://www.google.com/s2/favicons?domain=ssga.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">SPYM</span></button></td><td class="num close">90.47</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num">$157.41B</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric mid">26.82</td><td class="num na">—</td><td class="num na">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    
+
+    <section class="market">
+      <header class="market-head">
+        <h2>US Stocks</h2>
+        <div class="head-meta">
+          <span class="cur-badge cur-usd">USD</span>
+          <span class="pill">9 tickers</span>
+        </div>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ticker</th><th>Close</th><th>As&nbsp;Of</th><th>Market Cap</th><th>EV</th><th>Total Debt</th><th>Cash&nbsp;+&nbsp;STI</th><th>EBIT&nbsp;(TTM)</th><th>EV&nbsp;/&nbsp;EBIT</th><th>EV&nbsp;/&nbsp;EBITDA</th><th>P/E&nbsp;(TTM)</th><th>P/E&nbsp;(Fwd)</th><th>PEG</th></tr></thead>
+          <tbody>
+            <tr data-ticker="AAPL"><td class="ticker"><button type="button" class="tk-badge" data-ticker="AAPL" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="apple.com" src="https://www.google.com/s2/favicons?domain=apple.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">AAPL</span></button></td><td class="num close">312.41</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">4.56T</span></td><td class="num money"><span class="val">4.50T</span></td><td class="num money"><span class="val">84.34B</span></td><td class="num money"><span class="val">146.52B</span></td><td class="num money"><span class="val">154.86B</span></td><td class="num metric bad">29.04</td><td class="num metric bad">26.78</td><td class="num metric bad">35.84</td><td class="num metric bad">34.16</td><td class="num metric bad">3.14</td></tr><tr data-ticker="MSFT"><td class="ticker"><button type="button" class="tk-badge" data-ticker="MSFT" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="microsoft.com" src="https://www.google.com/s2/favicons?domain=microsoft.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">MSFT</span></button></td><td class="num close">499.86</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">3.71T</span></td><td class="num money"><span class="val">3.76T</span></td><td class="num money"><span class="val">128.81B</span></td><td class="num money"><span class="val">76.84B</span></td><td class="num money"><span class="val">155.24B</span></td><td class="num metric mid">24.24</td><td class="num metric mid">19.42</td><td class="num metric mid">27.85</td><td class="num metric mid">25.41</td><td class="num metric mid">1.62</td></tr><tr data-ticker="GOOGL"><td class="ticker"><button type="button" class="tk-badge" data-ticker="GOOGL" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="abc.xyz" src="https://www.google.com/s2/favicons?domain=abc.xyz&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">GOOGL</span></button></td><td class="num close">357.75</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">4.38T</span></td><td class="num money"><span class="val">4.25T</span></td><td class="num money"><span class="val">120.79B</span></td><td class="num money"><span class="val">242.47B</span></td><td class="num money"><span class="val">147.63B</span></td><td class="num metric bad">28.81</td><td class="num metric bad">24.56</td><td class="num metric good">17.95</td><td class="num metric mid">26.93</td><td class="num metric mid">1.88</td></tr><tr data-ticker="AMZN"><td class="ticker"><button type="button" class="tk-badge" data-ticker="AMZN" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="amazon.com" src="https://www.google.com/s2/favicons?domain=amazon.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">AMZN</span></button></td><td class="num close">272.26</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">2.94T</span></td><td class="num money"><span class="val">3.07T</span></td><td class="num money"><span class="val">251.63B</span></td><td class="num money"><span class="val">122.99B</span></td><td class="num money"><span class="val">93.71B</span></td><td class="num metric bad">32.71</td><td class="num metric mid">18.15</td><td class="num metric mid">21.89</td><td class="num metric mid">29.30</td><td class="num metric mid">1.46</td></tr><tr data-ticker="META"><td class="ticker"><button type="button" class="tk-badge" data-ticker="META" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="meta.com" src="https://www.google.com/s2/favicons?domain=meta.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">META</span></button></td><td class="num close">589.90</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">1.50T</span></td><td class="num money"><span class="val">1.52T</span></td><td class="num money"><span class="val">112.32B</span></td><td class="num money"><span class="val">90.26B</span></td><td class="num money"><span class="val">86.93B</span></td><td class="num metric mid">17.54</td><td class="num metric mid">13.91</td><td class="num metric mid">22.23</td><td class="num metric good">18.41</td><td class="num metric good">0.89</td></tr><tr data-ticker="KO"><td class="ticker"><button type="button" class="tk-badge" data-ticker="KO" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="coca-colacompany.com" src="https://www.google.com/s2/favicons?domain=coca-colacompany.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">KO</span></button></td><td class="num close">86.85</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">373.68B</span></td><td class="num money"><span class="val">401.57B</span></td><td class="num money"><span class="val">44.26B</span></td><td class="num money"><span class="val">16.37B</span></td><td class="num money"><span class="val">14.85B</span></td><td class="num metric bad">27.03</td><td class="num metric bad">25.27</td><td class="num metric mid">26.10</td><td class="num metric mid">25.55</td><td class="num metric bad">3.45</td></tr><tr data-ticker="PG"><td class="ticker"><button type="button" class="tk-badge" data-ticker="PG" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="pg.com" src="https://www.google.com/s2/favicons?domain=pg.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">PG</span></button></td><td class="num close">146.97</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">341.62B</span></td><td class="num money"><span class="val">366.70B</span></td><td class="num money"><span class="val">35.02B</span></td><td class="num money"><span class="val">9.94B</span></td><td class="num money"><span class="val">19.75B</span></td><td class="num metric mid">18.57</td><td class="num metric mid">16.01</td><td class="num metric mid">22.19</td><td class="num metric mid">20.97</td><td class="num metric bad">4.20</td></tr><tr data-ticker="JNJ"><td class="ticker"><button type="button" class="tk-badge" data-ticker="JNJ" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="jnj.com" src="https://www.google.com/s2/favicons?domain=jnj.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">JNJ</span></button></td><td class="num close">256.98</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">619.30B</span></td><td class="num money"><span class="val">647.57B</span></td><td class="num money"><span class="val">49.04B</span></td><td class="num money"><span class="val">20.76B</span></td><td class="num money"><span class="val">26.14B</span></td><td class="num metric mid">24.77</td><td class="num metric mid">19.11</td><td class="num metric mid">29.79</td><td class="num metric mid">22.88</td><td class="num metric bad">2.81</td></tr><tr data-ticker="UNH"><td class="ticker"><button type="button" class="tk-badge" data-ticker="UNH" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="unitedhealthgroup.com" src="https://www.google.com/s2/favicons?domain=unitedhealthgroup.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">UNH</span></button></td><td class="num close">403.97</td><td class="asof">Aug 6, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">366.86B</span></td><td class="num money"><span class="val">411.61B</span></td><td class="num money"><span class="val">73.33B</span></td><td class="num money"><span class="val">31.47B</span></td><td class="num money"><span class="val">21.68B</span></td><td class="num metric mid">18.99</td><td class="num metric mid">15.85</td><td class="num metric mid">26.01</td><td class="num metric good">18.98</td><td class="num metric mid">1.49</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    
+
+    <section class="market">
+      <header class="market-head">
+        <h2>HK Stocks</h2>
+        <div class="head-meta">
+          <span class="cur-badge cur-hkd">HKD</span>
+          <span class="pill">6 tickers</span>
+        </div>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ticker</th><th>Close</th><th>As&nbsp;Of</th><th>Market Cap</th><th>EV</th><th>Total Debt</th><th>Cash&nbsp;+&nbsp;STI</th><th>EBIT&nbsp;(TTM)</th><th>EV&nbsp;/&nbsp;EBIT</th><th>EV&nbsp;/&nbsp;EBITDA</th><th>P/E&nbsp;(TTM)</th><th>P/E&nbsp;(Fwd)</th><th>PEG</th></tr></thead>
+          <tbody>
+            <tr data-ticker="0700"><td class="ticker"><button type="button" class="tk-badge" data-ticker="0700" data-market="HKD"><img class="tk-logo" alt="" loading="lazy" data-domain="tencent.com" src="https://www.google.com/s2/favicons?domain=tencent.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">0700</span></button></td><td class="num close">479.2</td><td class="asof">Aug 6, 2026, 4:00 PM HKT</td><td class="num money"><span class="val">4.30T</span></td><td class="num money"><span class="val">4.34T</span></td><td class="num money"><span class="val">460.93B</span></td><td class="num money"><span class="val">522.54B</span></td><td class="num money"><span class="val">285.80B</span></td><td class="num metric good">13.91</td><td class="num metric mid">12.25</td><td class="num metric good">16.64</td><td class="num metric good">13.88</td><td class="num metric mid">1.51</td></tr><tr data-ticker="1810"><td class="ticker"><button type="button" class="tk-badge" data-ticker="1810" data-market="HKD"><img class="tk-logo" alt="" loading="lazy" data-domain="mi.com" src="https://www.google.com/s2/favicons?domain=mi.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">1810</span></button></td><td class="num close">26.86</td><td class="asof">Aug 6, 2026, 4:00 PM HKT</td><td class="num money"><span class="val">691.28B</span></td><td class="num money"><span class="val">619.97B</span></td><td class="num money"><span class="val">40.20B</span></td><td class="num money"><span class="val">111.65B</span></td><td class="num money"><span class="val">30.30B</span></td><td class="num metric mid">20.23</td><td class="num metric mid">15.01</td><td class="num metric good">17.88</td><td class="num metric mid">22.58</td><td class="num metric bad">2.54</td></tr><tr data-ticker="9988"><td class="ticker"><button type="button" class="tk-badge" data-ticker="9988" data-market="HKD"><img class="tk-logo" alt="" loading="lazy" data-domain="alibabagroup.com" src="https://www.google.com/s2/favicons?domain=alibabagroup.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">9988</span></button></td><td class="num close">124.4</td><td class="asof">Aug 6, 2026, 4:00 PM HKT</td><td class="num money"><span class="val">2.27T</span></td><td class="num money"><span class="val">2.30T</span></td><td class="num money"><span class="val">320.22B</span></td><td class="num money"><span class="val">360.12B</span></td><td class="num money"><span class="val">71.59B</span></td><td class="num metric bad">30.80</td><td class="num metric mid">16.81</td><td class="num metric good">18.85</td><td class="num metric good">18.23</td><td class="num metric ">n/a</td></tr><tr data-ticker="9618"><td class="ticker"><button type="button" class="tk-badge" data-ticker="9618" data-market="HKD"><img class="tk-logo" alt="" loading="lazy" data-domain="jd.com" src="https://www.google.com/s2/favicons?domain=jd.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">9618</span></button></td><td class="num close">127.3</td><td class="asof">Aug 6, 2026, 4:00 PM HKT</td><td class="num money"><span class="val">347.61B</span></td><td class="num money"><span class="val">255.56B</span></td><td class="num money"><span class="val">122.78B</span></td><td class="num money"><span class="val">229.76B</span></td><td class="num money"><span class="val">-3.45B</span></td><td class="num metric bad">42.43</td><td class="num metric good">7.71</td><td class="num metric mid">22.09</td><td class="num metric good">8.33</td><td class="num metric ">n/a</td></tr><tr data-ticker="9992"><td class="ticker"><button type="button" class="tk-badge" data-ticker="9992" data-market="HKD"><img class="tk-logo" alt="" loading="lazy" data-domain="popmart.com" src="https://www.google.com/s2/favicons?domain=popmart.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">9992</span></button></td><td class="num close">157.3</td><td class="asof">Aug 6, 2026, 4:00 PM HKT</td><td class="num money"><span class="val">206.30B</span></td><td class="num money"><span class="val">190.72B</span></td><td class="num money"><span class="val">3.18B</span></td><td class="num money"><span class="val">19.18B</span></td><td class="num money"><span class="val">18.95B</span></td><td class="num metric good">10.02</td><td class="num metric good">9.41</td><td class="num metric good">14.76</td><td class="num metric good">12.90</td><td class="num metric mid">1.39</td></tr><tr data-ticker="1211"><td class="ticker"><button type="button" class="tk-badge" data-ticker="1211" data-market="HKD"><img class="tk-logo" alt="" loading="lazy" data-domain="byd.com" src="https://www.google.com/s2/favicons?domain=byd.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">1211</span></button></td><td class="num close">89.85</td><td class="asof">Aug 6, 2026, 4:00 PM HKT</td><td class="num money"><span class="val">892.40B</span></td><td class="num money"><span class="val">923.11B</span></td><td class="num money"><span class="val">164.08B</span></td><td class="num money"><span class="val">147.25B</span></td><td class="num money"><span class="val">36.45B</span></td><td class="num metric bad">25.33</td><td class="num metric good">7.12</td><td class="num metric mid">26.41</td><td class="num metric good">17.09</td><td class="num metric mid">1.15</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    
+
+    <footer>
+      Coloring uses rough rules of thumb (EV/EBIT ≤15 good ≤25 fair; PEG ≤1 good ≤2 fair; P/E ≤20 good ≤30 fair). Not investment advice.
+    </footer>
+  </div>
+
+  <!-- 悬浮式图表面板：点击左侧 ticker 徽章后出现，支持 Tab 切换指标 -->
+  <aside class="chart-panel" id="chartPanel" aria-hidden="true">
+    <div class="chart-head">
+      <div>
+        <div class="chart-title" id="chartTitle">P/E (TTM) History</div>
+        <div class="chart-sub"   id="chartSub">Quarterly · source stockanalysis.com</div>
+      </div>
+      <button type="button" class="chart-close" id="chartClose" title="Close">×</button>
+    </div>
+    <div class="chart-toolbar">
+      <div class="chart-tabs" role="tablist">
+        <button type="button" class="chart-tab active" data-metric="pe"     role="tab" aria-selected="true">P/E (TTM)</button>
+        <button type="button" class="chart-tab"        data-metric="evebit" role="tab" aria-selected="false">EV / EBIT (TTM)</button>
+      </div>
+      <div class="range-group" role="tablist" aria-label="time range">
+        <button type="button" class="range-btn"        data-range="1y" role="tab" aria-selected="false">1Y</button>
+        <button type="button" class="range-btn"        data-range="3y" role="tab" aria-selected="false">3Y</button>
+        <button type="button" class="range-btn active" data-range="5y" role="tab" aria-selected="true">5Y</button>
+      </div>
+    </div>
+    <div class="chart-selected" id="chartSelected"></div>
+    <div class="chart-body" id="chartBody">
+      <div class="chart-empty">Click a ticker on the left to plot its history.<br/>Click again to remove; multiple tickers overlay for comparison.</div>
+    </div>
+    <div class="chart-legend" id="chartLegend"></div>
+    <div class="chart-formula" id="chartFormula"></div>
+  </aside>
+
+  <script>
+    // 每个 ticker 的 TTM 历史序列（旧->新），由 Python 端注入
+    //   1Y = 周频（约 52 个点），本地反算（采用当前快照的 EPS/EBIT/股本/债务/现金）
+    //   3Y = 季度 TTM（最近 12 个点），站点原始数据
+    //   5Y = 季度 TTM（20 个点），站点原始数据
+    const HISTORY_DATA = {
+      '1y': { pe: {"AAPL": [["2025-08-11", 35.14264036418817], ["2025-08-18", 34.561456752655545], ["2025-08-25", 35.22610015174507], ["2025-09-02", 36.37177541729894], ["2025-09-08", 35.518968133535665], ["2025-09-15", 37.25341426403642], ["2025-09-22", 38.76479514415782], ["2025-09-29", 34.54082998661311], ["2025-10-06", 32.83400267737617], ["2025-10-13", 33.77376171352075], ["2025-10-20", 35.18340026773761], ["2025-10-27", 36.194109772423026], ["2025-11-03", 35.93975903614458], ["2025-11-10", 36.467202141900934], ["2025-11-17", 36.34404283801874], ["2025-11-24", 37.329317269076306], ["2025-12-01", 37.319946452476565], ["2025-12-08", 37.253012048192765], ["2025-12-15", 36.63587684069611], ["2025-12-22", 36.59973226238286], ["2025-12-29", 34.261694058154234], ["2026-01-05", 32.79013906447535], ["2026-01-12", 32.304677623261696], ["2026-01-20", 31.357774968394438], ["2026-01-26", 32.80404551201011], ["2026-02-02", 35.16055625790139], ["2026-02-09", 32.336283185840706], ["2026-02-17", 33.448798988621995], ["2026-02-23", 33.39823008849557], ["2026-03-02", 32.54867256637168], ["2026-03-09", 31.620733249051835], ["2026-03-16", 31.351453855878635], ["2026-03-23", 31.45385587863464], ["2026-03-30", 30.945586457073762], ["2026-04-06", 31.49697702539299], ["2026-04-13", 32.675937122128175], ["2026-04-20", 32.776299879081016], ["2026-04-27", 33.87424425634825], ["2026-05-04", 35.46795646916566], ["2026-05-11", 36.303506650544136], ["2026-05-18", 37.342200725513905], ["2026-05-26", 37.73397823458283], ["2026-06-01", 37.163240628778716], ["2026-06-08", 35.203143893591296], ["2026-06-15", 36.03506650544136], ["2026-06-22", 34.31438935912938], ["2026-06-29", 35.393348623853214], ["2026-07-06", 36.1605504587156], ["2026-07-13", 38.27293577981652], ["2026-07-20", 38.190366972477065], ["2026-07-27", 35.425458715596335], ["2026-08-03", 35.839]], "MSFT": [["2025-08-11", 38.13563049853372], ["2025-08-18", 37.18695014662757], ["2025-08-25", 37.14736070381232], ["2025-09-02", 36.29032258064516], ["2025-09-08", 37.382697947214076], ["2025-09-15", 37.97140762463343], ["2025-09-22", 37.49706744868035], ["2025-09-29", 37.928885630498534], ["2025-10-06", 36.34139402560455], ["2025-10-13", 36.52773826458037], ["2025-10-20", 37.241109530583216], ["2025-10-27", 36.828591749644374], ["2025-11-03", 35.335704125177806], ["2025-11-10", 36.28591749644381], ["2025-11-17", 33.578947368421055], ["2025-11-24", 34.993598862019915], ["2025-12-01", 34.364153627311524], ["2025-12-08", 34.034850640113795], ["2025-12-15", 34.56045519203414], ["2025-12-22", 34.6877667140825], ["2025-12-29", 33.63726884779516], ["2026-01-05", 29.973733583489675], ["2026-01-12", 28.759224515322074], ["2026-01-20", 29.140087554721696], ["2026-01-26", 26.90994371482176], ["2026-02-02", 25.086929330831765], ["2026-02-09", 25.098186366479045], ["2026-02-17", 24.842401500938085], ["2026-02-23", 24.561601000625387], ["2026-03-02", 25.575984990619133], ["2026-03-09", 24.737335834896808], ["2026-03-16", 23.88180112570356], ["2026-03-23", 22.312070043777357], ["2026-03-30", 23.355847404627887], ["2026-04-06", 22.075595238095236], ["2026-04-13", 25.166071428571428], ["2026-04-20", 25.275], ["2026-04-27", 24.669047619047618], ["2026-05-04", 24.70952380952381], ["2026-05-11", 25.114285714285714], ["2026-05-18", 24.91488095238095], ["2026-05-26", 26.8], ["2026-06-01", 24.801785714285714], ["2026-06-08", 23.258333333333333], ["2026-06-15", 22.583333333333332], ["2026-06-22", 22.20059523809524], ["2026-06-29", 23.24345238095238], ["2026-07-06", 21.442093541202677], ["2026-07-13", 21.927616926503344], ["2026-07-20", 21.252783964365257], ["2026-07-27", 25.87527839643653], ["2026-08-03", 27.847]], "GOOGL": [["2025-08-11", 21.714589989350372], ["2025-08-18", 21.947816826411074], ["2025-08-25", 22.674121405750796], ["2025-09-02", 25.026624068157613], ["2025-09-08", 25.64430244941427], ["2025-09-15", 27.126730564430243], ["2025-09-22", 26.255591054313097], ["2025-09-29", 26.12886048988285], ["2025-10-06", 23.330374753451675], ["2025-10-13", 24.98027613412229], ["2025-10-20", 25.633136094674555], ["2025-10-27", 27.73076923076923], ["2025-11-03", 27.498027613412226], ["2025-11-10", 27.259368836291912], ["2025-11-17", 29.552268244575938], ["2025-11-24", 31.57593688362919], ["2025-12-01", 31.68343195266272], ["2025-12-08", 30.50197238658777], ["2025-12-15", 30.29191321499014], ["2025-12-22", 30.918145956607493], ["2025-12-29", 31.07988165680473], ["2026-01-05", 30.3950046253469], ["2026-01-12", 30.527289546716002], ["2026-01-20", 30.335800185013877], ["2026-01-26", 31.267345050878813], ["2026-02-02", 29.866790009250693], ["2026-02-09", 28.28122109158187], ["2026-02-17", 29.137835337650323], ["2026-02-23", 28.839962997224788], ["2026-03-02", 27.615171137835336], ["2026-03-09", 27.962997224791856], ["2026-03-16", 27.844588344125807], ["2026-03-23", 25.378353376503235], ["2026-03-30", 27.360777058279368], ["2026-04-06", 24.198321891685733], ["2026-04-13", 26.062547673531654], ["2026-04-20", 26.27002288329519], ["2026-04-27", 29.419527078565977], ["2026-05-04", 30.5720823798627], ["2026-05-11", 30.265446224256287], ["2026-05-18", 29.21205186880244], ["2026-05-26", 29.01144164759725], ["2026-06-01", 28.110602593440117], ["2026-06-08", 27.435545385202133], ["2026-06-15", 28.072463768115938], ["2026-06-22", 25.735316552250186], ["2026-06-29", 27.45308924485126], ["2026-07-06", 17.939728779507785], ["2026-07-13", 17.416875941737818], ["2026-07-20", 16.05926670015068], ["2026-07-27", 17.886991461577097], ["2026-08-03", 17.95]], "AMZN": [["2025-08-11", 35.21798780487805], ["2025-08-18", 34.88414634146342], ["2025-08-25", 34.90853658536586], ["2025-09-02", 35.41615853658537], ["2025-09-08", 34.77896341463415], ["2025-09-15", 35.28658536585366], ["2025-09-22", 33.50304878048781], ["2025-09-29", 33.46189024390244], ["2025-10-06", 30.560734463276837], ["2025-10-13", 30.090395480225986], ["2025-10-20", 31.668079096045197], ["2025-10-27", 34.494350282485875], ["2025-11-03", 34.521186440677965], ["2025-11-10", 33.148305084745765], ["2025-11-17", 31.17090395480226], ["2025-11-24", 32.940677966101696], ["2025-12-01", 32.41949152542373], ["2025-12-08", 31.94774011299435], ["2025-12-15", 32.11158192090395], ["2025-12-22", 32.84180790960452], ["2025-12-29", 31.991525423728813], ["2026-01-05", 34.50209205020921], ["2026-01-12", 33.350069735006976], ["2026-01-20", 33.35564853556485], ["2026-01-26", 33.375174337517436], ["2026-02-02", 29.333333333333332], ["2026-02-09", 27.725244072524408], ["2026-02-17", 29.304044630404466], ["2026-02-23", 29.288702928870293], ["2026-03-02", 29.73640167364017], ["2026-03-09", 28.963737796373778], ["2026-03-16", 28.64295676429568], ["2026-03-23", 27.80195258019526], ["2026-03-30", 29.256624825662485], ["2026-04-06", 28.514354066985646], ["2026-04-13", 29.97129186602871], ["2026-04-20", 31.57775119617225], ["2026-04-27", 32.088516746411486], ["2026-05-04", 32.61722488038278], ["2026-05-11", 31.595693779904305], ["2026-05-18", 31.856459330143544], ["2026-05-26", 32.3732057416268], ["2026-06-01", 29.429425837320576], ["2026-06-08", 28.534688995215316], ["2026-06-15", 29.233253588516746], ["2026-06-22", 27.83373205741627], ["2026-06-29", 29.02751196172249], ["2026-07-06", 19.737731295253422], ["2026-07-13", 19.889782783588096], ["2026-07-20", 18.673370876910703], ["2026-07-27", 21.848753016894612], ["2026-08-03", 21.893]], "META": [["2025-08-11", 28.429761042722664], ["2025-08-18", 27.32766111513396], ["2025-08-25", 26.74511223750905], ["2025-09-02", 27.242939898624186], ["2025-09-08", 27.356625633598842], ["2025-09-15", 28.181752353367123], ["2025-09-22", 26.92795076031861], ["2025-09-29", 25.726285300506877], ["2025-10-06", 31.15282685512367], ["2025-10-13", 31.665856890459363], ["2025-10-20", 32.613074204947], ["2025-10-27", 28.637367491166078], ["2025-11-03", 27.460689045936398], ["2025-11-10", 26.919611307420496], ["2025-11-17", 26.247791519434628], ["2025-11-24", 28.61969964664311], ["2025-12-01", 29.744699646643106], ["2025-12-08", 28.455388692579504], ["2025-12-15", 29.097614840989397], ["2025-12-22", 29.297261484098936], ["2025-12-29", 28.728356890459363], ["2026-01-05", 27.78978723404255], ["2026-01-12", 26.393617021276597], ["2026-01-20", 28.032340425531913], ["2026-01-26", 30.48936170212766], ["2026-02-02", 28.147234042553194], ["2026-02-09", 27.224255319148934], ["2026-02-17", 27.90042553191489], ["2026-02-23", 27.582127659574464], ["2026-03-02", 27.440851063829786], ["2026-03-09", 26.115319148936173], ["2026-03-16", 25.262127659574467], ["2026-03-23", 22.371063829787236], ["2026-03-30", 24.445106382978725], ["2026-04-06", 22.895674300254452], ["2026-04-13", 25.029080334423842], ["2026-04-20", 24.53762268266085], ["2026-04-27", 22.12813522355507], ["2026-05-04", 22.16030534351145], ["2026-05-11", 22.327517266448563], ["2026-05-18", 22.183206106870227], ["2026-05-26", 22.99200290803344], ["2026-06-01", 21.555797891675752], ["2026-06-08", 20.609960014540167], ["2026-06-15", 20.982188295165393], ["2026-06-22", 20.00181752090149], ["2026-06-29", 21.188658669574696], ["2026-07-06", 25.205649717514124], ["2026-07-13", 24.33182674199623], ["2026-07-20", 22.417702448210925], ["2026-07-27", 20.968361581920906], ["2026-08-03", 22.229]], "KO": [["2025-08-11", 24.79432624113475], ["2025-08-18", 24.86879432624113], ["2025-08-25", 24.464539007092196], ["2025-09-02", 24.09929078014184], ["2025-09-08", 23.76241134751773], ["2025-09-15", 23.55673758865248], ["2025-09-22", 23.28723404255319], ["2025-09-29", 22.069536423841065], ["2025-10-06", 22.198675496688747], ["2025-10-13", 22.66225165562914], ["2025-10-20", 23.082781456953644], ["2025-10-27", 22.814569536423846], ["2025-11-03", 23.360927152317885], ["2025-11-10", 23.56291390728477], ["2025-11-17", 24.15562913907285], ["2025-11-24", 24.21192052980133], ["2025-12-01", 23.17880794701987], ["2025-12-08", 23.350993377483444], ["2025-12-15", 23.198675496688747], ["2025-12-22", 23.135761589403977], ["2025-12-29", 22.88741721854305], ["2026-01-05", 23.19407894736842], ["2026-01-12", 23.171052631578945], ["2026-01-20", 23.973684210526315], ["2026-01-26", 24.60855263157895], ["2026-02-02", 25.99671052631579], ["2026-02-09", 25.88157894736842], ["2026-02-17", 26.263157894736842], ["2026-02-23", 26.82894736842105], ["2026-03-02", 25.342105263157897], ["2026-03-09", 25.440789473684212], ["2026-03-16", 24.588815789473685], ["2026-03-23", 24.904605263157894], ["2026-03-30", 25.236842105263158], ["2026-04-06", 24.361635220125788], ["2026-04-13", 23.81761006289308], ["2026-04-20", 24.09748427672956], ["2026-04-27", 24.710691823899374], ["2026-05-04", 24.660377358490567], ["2026-05-11", 25.41509433962264], ["2026-05-18", 25.622641509433965], ["2026-05-26", 24.84591194968554], ["2026-06-01", 24.993710691823903], ["2026-06-08", 25.981132075471702], ["2026-06-15", 24.965408805031448], ["2026-06-22", 25.98427672955975], ["2026-06-29", 26.459119496855347], ["2026-07-06", 25.072072072072075], ["2026-07-13", 24.492492492492495], ["2026-07-20", 24.699699699699703], ["2026-07-27", 26.303303303303306], ["2026-08-03", 26.102]], "PG": [["2025-08-11", 23.71121351766513], ["2025-08-18", 24.373271889400918], ["2025-08-25", 24.122887864823344], ["2025-09-02", 24.58064516129032], ["2025-09-08", 24.254992319508446], ["2025-09-15", 23.969278033794158], ["2025-09-22", 23.42549923195084], ["2025-09-29", 23.39016897081413], ["2025-10-06", 21.85255474452555], ["2025-10-13", 22.1021897810219], ["2025-10-20", 22.26131386861314], ["2025-10-27", 21.95182481751825], ["2025-11-03", 21.45693430656934], ["2025-11-10", 21.55766423357664], ["2025-11-17", 22.03211678832117], ["2025-11-24", 21.62919708029197], ["2025-12-01", 20.94160583941606], ["2025-12-08", 20.85255474452555], ["2025-12-15", 21.089051094890515], ["2025-12-22", 21.129927007299273], ["2025-12-29", 20.6992700729927], ["2026-01-05", 21.017777777777777], ["2026-01-12", 21.411851851851853], ["2026-01-20", 22.244444444444444], ["2026-01-26", 22.484444444444446], ["2026-02-02", 23.58074074074074], ["2026-02-09", 23.714074074074073], ["2026-02-17", 23.81925925925926], ["2026-02-23", 24.77037037037037], ["2026-03-02", 22.759999999999998], ["2026-03-09", 22.31851851851852], ["2026-03-16", 21.374814814814815], ["2026-03-23", 21.142222222222223], ["2026-03-30", 21.202962962962964], ["2026-04-06", 21.22222222222222], ["2026-04-13", 21.480994152046787], ["2026-04-20", 21.66374269005848], ["2026-04-27", 21.529239766081872], ["2026-05-04", 21.40643274853801], ["2026-05-11", 20.69736842105263], ["2026-05-18", 21.116959064327485], ["2026-05-26", 20.98830409356725], ["2026-06-01", 21.423976608187132], ["2026-06-08", 21.872807017543863], ["2026-06-15", 21.985380116959064], ["2026-06-22", 21.78654970760234], ["2026-06-29", 22.135964912280702], ["2026-07-06", 22.211480362537763], ["2026-07-13", 22.655589123867067], ["2026-07-20", 22.26737160120846], ["2026-07-27", 21.82628398791541], ["2026-08-03", 22.188]], "JNJ": [["2025-08-11", 18.863511855371197], ["2025-08-18", 19.14650724948767], ["2025-08-25", 18.920110934194494], ["2025-09-02", 19.05466723479327], ["2025-09-08", 19.015154670331725], ["2025-09-15", 18.81545603372878], ["2025-09-22", 19.191359349687264], ["2025-09-29", 18.183728531893337], ["2025-10-06", 18.38422765904738], ["2025-10-13", 18.625212186876755], ["2025-10-20", 18.353381639485217], ["2025-10-27", 18.205899108453643], ["2025-11-03", 17.984193342850617], ["2025-11-10", 18.886439415043796], ["2025-11-17", 19.654698089763844], ["2025-11-24", 19.945807399381728], ["2025-12-01", 19.4648022818343], ["2025-12-08", 20.395002559255687], ["2025-12-15", 19.892790803259267], ["2025-12-22", 20.014247005285274], ["2025-12-29", 19.987256738168384], ["2026-01-05", 18.498757789272183], ["2026-01-12", 19.790294917570602], ["2026-01-20", 19.924245509713675], ["2026-01-26", 20.567751394941553], ["2026-02-02", 21.72081257325423], ["2026-02-09", 22.033967335967088], ["2026-02-17", 21.9470804653878], ["2026-02-23", 22.48469297709716], ["2026-03-02", 21.757920507564133], ["2026-03-09", 21.85928852323997], ["2026-03-16", 21.30266950859139], ["2026-03-23", 21.762445865406804], ["2026-03-30", 21.996859401657183], ["2026-04-06", 27.567630057803466], ["2026-04-13", 27.072832369942198], ["2026-04-20", 26.30057803468208], ["2026-04-27", 26.264739884393062], ["2026-05-04", 25.586127167630057], ["2026-05-11", 26.209248554913295], ["2026-05-18", 27.091329479768785], ["2026-05-26", 26.04971098265896], ["2026-06-01", 26.909826589595376], ["2026-06-08", 27.846242774566473], ["2026-06-15", 26.403468208092484], ["2026-06-22", 29.440462427745665], ["2026-06-29", 30.409248554913297], ["2026-07-06", 29.777520278099658], ["2026-07-13", 29.320973348783316], ["2026-07-20", 30.52143684820394], ["2026-07-27", 29.704519119351108], ["2026-08-03", 29.788]], "UNH": [["2025-08-11", 13.17201039861352], ["2025-08-18", 13.319757365684577], ["2025-08-25", 13.425909878682843], ["2025-09-02", 13.665077989601388], ["2025-09-08", 15.273396880415945], ["2025-09-15", 14.587954939341422], ["2025-09-22", 14.908145580589256], ["2025-09-29", 15.606585788561526], ["2025-10-06", 18.502087682672233], ["2025-10-13", 18.61169102296451], ["2025-10-20", 18.919624217118997], ["2025-10-27", 17.826722338204593], ["2025-11-03", 16.921189979123174], ["2025-11-10", 16.79853862212944], ["2025-11-17", 16.69989561586639], ["2025-11-24", 17.211377870563673], ["2025-12-01", 17.27087682672234], ["2025-12-08", 17.841336116910227], ["2025-12-15", 17.088726513569938], ["2025-12-22", 17.318893528183715], ["2025-12-29", 17.55741127348643], ["2026-01-05", 26.078847611827143], ["2026-01-12", 25.09628506444276], ["2026-01-20", 27.009855951478393], ["2026-01-26", 21.753601213040184], ["2026-02-02", 20.974222896133433], ["2026-02-09", 22.228203184230477], ["2026-02-17", 21.986353297952995], ["2026-02-23", 22.234268385140258], ["2026-03-02", 21.719484457922672], ["2026-03-09", 21.38665655799848], ["2026-03-16", 20.893858984078847], ["2026-03-23", 19.637604245640635], ["2026-03-30", 21.020470053070508], ["2026-04-06", 22.985649546827794], ["2026-04-13", 24.518882175226587], ["2026-04-20", 26.80664652567976], ["2026-04-27", 27.853474320241688], ["2026-05-04", 28.69939577039275], ["2026-05-11", 29.746978851963746], ["2026-05-18", 29.340634441087616], ["2026-05-26", 28.724320241691842], ["2026-06-01", 30.171450151057403], ["2026-06-08", 30.854984894259818], ["2026-06-15", 30.283987915407852], ["2026-06-22", 32.31797583081571], ["2026-06-29", 32.12688821752266], ["2026-07-06", 27.324324324324323], ["2026-07-13", 27.418918918918916], ["2026-07-20", 27.074646074646072], ["2026-07-27", 26.666666666666664], ["2026-08-03", 26.006]], "0700": [["2025-08-11", 26.631697568283087], ["2025-08-18", 26.991585373259884], ["2025-08-25", 26.834134458582536], ["2025-09-01", 27.239008239181434], ["2025-09-08", 28.948475312821227], ["2025-09-15", 28.903489337199126], ["2025-09-22", 28.970968300632276], ["2025-09-29", 30.298054581484223], ["2025-10-06", 27.884454183530554], ["2025-10-13", 26.022637211951768], ["2025-10-20", 27.285248721413243], ["2025-10-27", 26.921445405127734], ["2025-11-03", 27.135447355883915], ["2025-11-10", 27.43505008694257], ["2025-11-17", 26.108237992254242], ["2025-11-24", 26.172438577481095], ["2025-12-01", 26.108237992254242], ["2025-12-08", 26.36504033316166], ["2025-12-15", 26.279439552859188], ["2025-12-22", 25.808635261195587], ["2025-12-29", 26.664643064220314], ["2026-01-05", 25.317815239120343], ["2026-01-12", 25.587153699110985], ["2026-01-19", 24.65482826068184], ["2026-01-26", 25.11063180835831], ["2026-02-02", 22.686585668442532], ["2026-02-09", 22.044317033080233], ["2026-02-16", 21.629950171556168], ["2026-02-23", 21.464203426946543], ["2026-03-02", 21.50564011309895], ["2026-03-09", 22.686585668442532], ["2026-03-16", 21.049836565422478], ["2026-03-23", 20.444860947597345], ["2026-03-30", 20.270826865757236], ["2026-04-08", 19.935615666936044], ["2026-04-13", 20.17270921302448], ["2026-04-20", 19.496992606672435], ["2026-04-27", 18.485393476695105], ["2026-05-04", 18.627649604348168], ["2026-05-11", 18.034915739127076], ["2026-05-18", 17.442181873905984], ["2026-05-26", 16.881060481496686], ["2026-06-01", 17.90846584787991], ["2026-06-08", 18.3194279944332], ["2026-06-15", 17.394763164688296], ["2026-06-22", 16.2725203798697], ["2026-06-29", 17.039122845555642], ["2026-07-06", 18.185074984983085], ["2026-07-13", 18.240396812403723], ["2026-07-20", 17.17347585500576], ["2026-07-27", 18.777808850204178], ["2026-08-03", 16.645]], "1810": [["2025-08-11", 36.739863690587086], ["2025-08-18", 36.53131195724411], ["2025-08-25", 36.739863690587086], ["2025-09-01", 37.29600164616834], ["2025-09-08", 38.33876031288321], ["2025-09-15", 39.41627760182191], ["2025-09-22", 37.99117409064492], ["2025-09-29", 38.234484446211724], ["2025-10-06", 30.839930392410707], ["2025-10-13", 27.231569660618565], ["2025-10-20", 27.20786942592699], ["2025-10-27", 25.596253466899956], ["2025-11-03", 25.02744783430218], ["2025-11-10", 25.0985485383769], ["2025-11-17", 22.562623426378476], ["2025-11-24", 24.30459067620917], ["2025-12-01", 25.347401002638428], ["2025-12-08", 25.45405205875051], ["2025-12-15", 24.02018785991028], ["2025-12-22", 23.238080115088337], ["2025-12-29", 23.86613633441505], ["2026-01-05", 24.14168398139903], ["2026-01-12", 23.68208555552364], ["2026-01-19", 23.133120769061364], ["2026-01-26", 22.66075572024499], ["2026-02-02", 22.45648975318926], ["2026-02-09", 23.51611945729086], ["2026-02-16", 22.57138935965811], ["2026-02-23", 22.277757032015497], ["2026-03-02", 21.33302693438275], ["2026-03-09", 21.269193819677835], ["2026-03-16", 21.192594082031935], ["2026-03-23", 21.0649278526221], ["2026-03-30", 19.711665820877894], ["2026-04-08", 23.390236960510617], ["2026-04-13", 24.2228991176809], ["2026-04-20", 23.617326639738877], ["2026-04-27", 21.967141637346867], ["2026-05-04", 23.98067012650409], ["2026-05-11", 23.238843841025112], ["2026-05-18", 22.708967922825842], ["2026-05-26", 21.225315351867888], ["2026-06-01", 21.043643608485283], ["2026-06-08", 19.832498652601235], ["2026-06-15", 18.606214384768638], ["2026-06-22", 16.214203096897652], ["2026-06-29", 17.379930116936045], ["2026-07-06", 19.559991037527325], ["2026-07-13", 20.347235258851956], ["2026-07-20", 20.226120763263552], ["2026-07-27", 21.785469893964258], ["2026-08-03", 17.882]], "9988": [["2025-08-11", 1.9139245726701521], ["2025-08-18", 1.9123039760802538], ["2025-08-25", 1.8750302545125879], ["2025-09-01", 2.1359463054862498], ["2025-09-08", 2.4487214473366636], ["2025-09-15", 2.5783691745285453], ["2025-09-22", 2.698293322181036], ["2025-09-29", 2.999724287902161], ["2025-10-06", 3.163413103939599], ["2025-10-13", 2.953028919276143], ["2025-10-20", 3.2188780253508735], ["2025-10-27", 3.157675353448777], ["2025-11-03", 3.0620461786017517], ["2025-11-10", 2.9625918367608457], ["2025-11-17", 2.8229732414841884], ["2025-11-24", 2.897563997864868], ["2025-12-01", 2.9645044202577857], ["2025-12-08", 2.947291168785321], ["2025-12-15", 2.778983821054557], ["2025-12-22", 2.79237190553314], ["2025-12-29", 2.8497494104413557], ["2026-01-05", 3.8728779239534377], ["2026-01-12", 4.39366765161134], ["2026-01-19", 4.45447051321607], ["2026-01-26", 4.472975731965335], ["2026-02-02", 4.097584151623091], ["2026-02-09", 4.108158562336957], ["2026-02-16", 3.8887395400242366], ["2026-02-23", 3.7777082275286435], ["2026-03-02", 3.4551887007557287], ["2026-03-09", 3.5027735489681264], ["2026-03-16", 3.2701365132630733], ["2026-03-23", 3.2410568837999416], ["2026-03-30", 3.1326691739828147], ["2026-04-08", 2.9045338732294783], ["2026-04-13", 3.156800161820724], ["2026-04-20", 3.0503391592959783], ["2026-04-27", 2.9161057213299943], ["2026-05-04", 3.2169737719434064], ["2026-05-11", 3.0619110073964944], ["2026-05-18", 2.939249417531026], ["2026-05-26", 2.7980728707047327], ["2026-06-01", 2.8327884150062803], ["2026-06-08", 2.5504353213536937], ["2026-06-15", 2.4277737314882257], ["2026-06-22", 2.071360809992337], ["2026-06-29", 2.1778218125170827], ["2026-07-06", 2.5504353213536937], ["2026-07-13", 2.6059801922361694], ["2026-07-20", 2.545806582113487], ["2026-07-27", 2.707812455520709], ["2026-08-03", 18.851]], "9618": [["2025-08-11", 4.734831039827689], ["2025-08-18", 4.758348412542066], ["2025-08-25", 4.61724417625581], ["2025-09-01", 4.785785347375504], ["2025-09-08", 5.162063310805519], ["2025-09-15", 5.440352221258968], ["2025-09-22", 5.193419807758021], ["2025-09-29", 5.495226090925844], ["2025-10-06", 6.224893206242236], ["2025-10-13", 5.86122342105206], ["2025-10-20", 6.0832036795447655], ["2025-10-27", 6.0265278688657755], ["2025-11-03", 5.856500436828811], ["2025-11-10", 5.521168556978129], ["2025-11-17", 5.2094515982436915], ["2025-11-24", 5.502276620085133], ["2025-12-01", 5.525891541201378], ["2025-12-08", 5.459769762075891], ["2025-12-15", 5.256681440476182], ["2025-12-22", 5.327526203824918], ["2025-12-29", 5.436154840959646], ["2026-01-05", 9.001670728938958], ["2026-01-12", 8.923122118738792], ["2026-01-19", 9.01738045097899], ["2026-01-26", 8.828863786498594], ["2026-02-02", 8.396846430397686], ["2026-02-09", 8.357572125297603], ["2026-02-16", 8.15334573877717], ["2026-02-23", 8.200474904897272], ["2026-03-02", 8.373281847337633], ["2026-03-09", 8.60892767793813], ["2026-03-16", 8.530379067737965], ["2026-03-23", 8.930976979758809], ["2026-03-30", 8.789589481398512], ["2026-04-08", 12.25391789875008], ["2026-04-13", 13.485909644405384], ["2026-04-20", 13.03491266608514], ["2026-04-27", 12.792914287474275], ["2026-05-04", 13.03491266608514], ["2026-05-11", 14.068905738331555], ["2026-05-18", 13.38691030770094], ["2026-05-26", 12.48491635106045], ["2026-06-01", 12.737914655971807], ["2026-06-08", 12.385917014356005], ["2026-06-15", 11.978919741237736], ["2026-06-22", 10.559929248474036], ["2026-06-29", 11.461923205114529], ["2026-07-06", 12.121918783144155], ["2026-07-13", 12.792914287474275], ["2026-07-20", 12.990912960883163], ["2026-07-27", 13.980906327927604], ["2026-08-03", 22.092]], "9992": [["2025-08-11", 43.538188477684194], ["2025-08-18", 51.39880467299195], ["2025-08-25", 51.71964615035145], ["2025-09-01", 49.66626069525066], ["2025-09-08", 44.40446046655485], ["2025-09-15", 43.538188477684194], ["2025-09-22", 42.671916488813544], ["2025-09-29", 40.87520421560035], ["2025-10-06", 41.645223761263146], ["2025-10-13", 44.179871432403196], ["2025-10-20", 36.96093819181444], ["2025-10-27", 35.549235691432635], ["2025-11-03", 32.85416728161284], ["2025-11-10", 34.715047850297935], ["2025-11-17", 31.971853218874212], ["2025-11-24", 36.06258205520784], ["2025-12-01", 35.13214177086529], ["2025-12-08", 31.137665377739506], ["2025-12-15", 30.945160491323808], ["2025-12-22", 32.116231883685984], ["2025-12-29", 30.97724463905976], ["2026-01-05", 16.51207757893716], ["2026-01-12", 14.969832769533891], ["2026-01-19", 18.40635652961726], ["2026-01-26", 18.7416271403571], ["2026-02-02", 20.38445313298232], ["2026-02-09", 20.736487274259154], ["2026-02-16", 20.485034316204274], ["2026-02-23", 19.261296587003855], ["2026-03-02", 17.383781166860746], ["2026-03-09", 17.16585526987985], ["2026-03-16", 17.568180002767658], ["2026-03-23", 12.539120841670046], ["2026-03-30", 11.885343150727357], ["2026-04-08", 12.648083790160495], ["2026-04-13", 13.335388542177167], ["2026-04-20", 13.117462645196271], ["2026-04-27", 13.176135002075743], ["2026-05-04", 14.08974741634181], ["2026-05-11", 12.773810269187935], ["2026-05-18", 12.61455672908651], ["2026-05-26", 14.5339809755721], ["2026-06-01", 14.78543393362698], ["2026-06-08", 15.338630441347716], ["2026-06-15", 13.771240336138963], ["2026-06-22", 13.285097950566191], ["2026-06-29", 12.8492461566044], ["2026-07-06", 12.631320259623502], ["2026-07-13", 13.712567979259488], ["2026-07-20", 13.486260317010096], ["2026-07-27", 13.628750326574528], ["2026-08-03", 14.755]], "1211": [["2025-08-11", 23.679838506860225], ["2025-08-18", 23.994729976366347], ["2025-08-25", 24.01572274100009], ["2025-09-01", 22.16835945323085], ["2025-09-08", 21.937439042259694], ["2025-09-15", 23.826787859296417], ["2025-09-22", 22.357294334934522], ["2025-09-29", 22.96608450931302], ["2025-10-06", 25.244724505861353], ["2025-10-13", 24.078147587845578], ["2025-10-20", 24.264799894728103], ["2025-10-27", 23.471527590477375], ["2025-11-03", 22.84157605474886], ["2025-11-10", 23.471527590477375], ["2025-11-17", 21.64000182919261], ["2025-11-24", 22.748249901307595], ["2025-12-01", 23.1332202842528], ["2025-12-08", 22.98156528491075], ["2025-12-15", 21.861651443615607], ["2025-12-22", 21.83831990525529], ["2025-12-29", 23.03989413081154], ["2026-01-05", 26.343570873121504], ["2026-01-12", 27.639156325897975], ["2026-01-19", 27.750604536889497], ["2026-01-26", 27.2351565610537], ["2026-02-02", 25.716674686294184], ["2026-02-09", 27.2351565610537], ["2026-02-16", 26.594329347852437], ["2026-02-23", 26.45501908411303], ["2026-03-02", 26.385363952243328], ["2026-03-09", 26.95653603357489], ["2026-03-16", 28.9208107523005], ["2026-03-23", 29.67308617649329], ["2026-03-30", 28.948672805048382], ["2026-04-08", 35.056575843117315], ["2026-04-13", 37.15796906682464], ["2026-04-20", 33.755713371298505], ["2026-04-27", 34.18933419523811], ["2026-05-04", 33.27205937536587], ["2026-05-11", 32.171329591519175], ["2026-05-18", 30.553590363744494], ["2026-05-26", 30.453524019758433], ["2026-06-01", 29.919836851832766], ["2026-06-08", 28.869140239979107], ["2026-06-15", 26.967879704243913], ["2026-06-22", 24.232732968624866], ["2026-06-29", 28.051931764092924], ["2026-07-06", 28.318775348055762], ["2026-07-13", 29.586282371879225], ["2026-07-20", 29.569604647881548], ["2026-07-27", 31.40415428762603], ["2026-08-03", 26.412]]}, evebit: {"AAPL": [["2025-08-11", 25.478774526548605], ["2025-08-18", 25.049514159767767], ["2025-08-25", 25.54041766015943], ["2025-09-02", 26.38660976699894], ["2025-09-08", 25.756729019921053], ["2025-09-15", 27.03778541477875], ["2025-09-22", 28.15408652525842], ["2025-09-29", 27.834778832018035], ["2025-10-06", 26.43623847125141], ["2025-10-13", 27.206258340473507], ["2025-10-20", 28.361288144306652], ["2025-10-27", 29.189443416760618], ["2025-11-03", 28.981033480646378], ["2025-11-10", 29.413209874483282], ["2025-11-17", 29.312295589627958], ["2025-11-24", 30.119609868470505], ["2025-12-01", 30.111931607666286], ["2025-12-08", 30.057086887636224], ["2025-12-15", 29.551418568959036], ["2025-12-22", 29.5218024201428], ["2025-12-29", 27.596198495782236], ["2026-01-05", 26.39200018855887], ["2026-01-12", 25.994738891330545], ["2026-01-20", 25.219872454809668], ["2026-01-26", 26.403380069469062], ["2026-02-02", 28.331752616431558], ["2026-02-09", 26.020602257035513], ["2026-02-17", 26.93099272985043], ["2026-02-23", 26.88961134472248], ["2026-03-02", 26.194404074572905], ["2026-03-09", 25.43505565747501], ["2026-03-16", 25.214699781668674], ["2026-03-23", 25.298497086552775], ["2026-03-30", 24.922774219290744], ["2026-04-06", 25.374367265176502], ["2026-04-13", 26.339944501445384], ["2026-04-20", 26.422142358481604], ["2026-04-27", 27.321367107745342], ["2026-05-04", 28.62662946405548], ["2026-05-11", 29.31095138227271], ["2026-05-18", 30.16164968581627], ["2026-05-26", 30.482518428945617], ["2026-06-01", 30.015080013028786], ["2026-06-08", 28.409745961755085], ["2026-06-15", 29.091096873091487], ["2026-06-22", 27.681849275952388], ["2026-06-29", 28.684343650675775], ["2026-07-06", 29.31482082152151], ["2026-07-13", 31.050753480262692], ["2026-07-20", 30.982899434969877], ["2026-07-27", 28.710731334956314], ["2026-08-03", 29.04]], "MSFT": [["2025-08-11", 30.456523077099696], ["2025-08-18", 29.708930656354493], ["2025-08-25", 29.67773282735894], ["2025-09-02", 29.002357603362693], ["2025-09-08", 29.86318658861026], ["2025-09-15", 30.32710986052556], ["2025-09-22", 29.95331365015296], ["2025-09-29", 30.29360108123405], ["2025-10-06", 28.29345008409307], ["2025-10-13", 28.436567330953164], ["2025-10-20", 28.98445511187175], ["2025-10-27", 28.667630672257808], ["2025-11-03", 27.521053950275643], ["2025-11-10", 28.250842659455333], ["2025-11-17", 26.171818836747317], ["2025-11-24", 27.258308165009602], ["2025-12-01", 26.774877770081435], ["2025-12-08", 26.5219644674241], ["2025-12-15", 26.925642503414966], ["2025-12-22", 27.023421080468232], ["2025-12-29", 26.216611257520324], ["2026-01-05", 25.329059848388948], ["2026-01-12", 24.31752011091029], ["2026-01-20", 24.634733138780785], ["2026-01-26", 22.777291993647474], ["2026-02-02", 21.258940636927445], ["2026-02-09", 21.268316391445786], ["2026-02-17", 21.055278413779067], ["2026-02-23", 20.82140542607159], ["2026-03-02", 21.666265083224207], ["2026-03-09", 20.9677713716079], ["2026-03-16", 20.255214028214073], ["2026-03-23", 18.94781714815669], ["2026-03-30", 19.817157942107197], ["2026-04-06", 18.836859336903736], ["2026-04-13", 21.42508494491625], ["2026-04-20", 21.516310924551515], ["2026-04-27", 21.00883525641655], ["2026-05-04", 21.042733434641676], ["2026-05-11", 21.381715216892932], ["2026-05-18", 21.214716838872093], ["2026-05-26", 22.793474639445208], ["2026-06-01", 21.120001340890123], ["2026-06-08", 19.827384044746736], ["2026-06-15", 19.26208207258068], ["2026-06-22", 18.94154488730486], ["2026-06-29", 19.814921479222797], ["2026-07-06", 18.755500097168202], ["2026-07-13", 19.172609141284745], ["2026-07-20", 18.59286583684753], ["2026-07-27", 22.564011805030503], ["2026-08-03", 24.24]], "GOOGL": [["2025-08-11", 19.54365988300239], ["2025-08-18", 19.76433797478784], ["2025-08-25", 20.451563813133394], ["2025-09-02", 22.677490318859686], ["2025-09-08", 23.261934580209278], ["2025-09-15", 24.6646008074483], ["2025-09-22", 23.84033286644146], ["2025-09-29", 23.720421026612836], ["2025-10-06", 22.33748478767217], ["2025-10-13", 23.986524496885], ["2025-10-20", 24.639043497183202], ["2025-10-27", 26.735581131071836], ["2025-11-03", 26.50296106450027], ["2025-11-10", 26.2644269284396], ["2025-11-17", 28.556128855468785], ["2025-11-24", 30.57874062074357], ["2025-12-01", 30.686179549795693], ["2025-12-08", 29.50533700847055], ["2025-12-15", 29.29538754160723], ["2025-12-22", 29.921293229204444], ["2025-12-29", 30.082944461906717], ["2026-01-05", 30.198064926107612], ["2026-01-12", 30.33359681956618], ["2026-01-20", 30.13740729546881], ["2026-01-26", 31.091817202551166], ["2026-02-02", 29.656885127752076], ["2026-02-09", 28.03239795720674], ["2026-02-17", 28.91003805051186], ["2026-02-23", 28.6048543463604], ["2026-03-02", 27.349999612520246], ["2026-03-09", 27.706363192523188], ["2026-03-16", 27.585047931245594], ["2026-03-23", 25.058278504948113], ["2026-03-30", 27.089361355869155], ["2026-04-06", 27.207626204490005], ["2026-04-13", 29.371554126939312], ["2026-04-20", 29.61238407575527], ["2026-04-27", 33.268218114950514], ["2026-05-04", 34.60606389679213], ["2026-05-11", 34.250131398909716], ["2026-05-18", 33.02738816613456], ["2026-05-26", 32.794526855330886], ["2026-06-01", 31.748864467273346], ["2026-06-08", 30.96528172939788], ["2026-06-15", 31.70459425609394], ["2026-06-22", 28.991715715020018], ["2026-06-29", 30.985646026540408], ["2026-07-06", 28.76573820684423], ["2026-07-13", 27.903338797518085], ["2026-07-20", 25.66408269433983], ["2026-07-27", 28.678752675644187], ["2026-08-03", 28.81]], "AMZN": [["2025-08-11", 34.3957084202541], ["2025-08-18", 34.085667381762434], ["2025-08-25", 34.10831878183489], ["2025-09-02", 34.57975104584276], ["2025-09-08", 33.98798321895], ["2025-09-15", 34.45941548295787], ["2025-09-22", 32.803031852659934], ["2025-09-29", 32.76480761503767], ["2025-10-06", 32.31560829350848], ["2025-10-13", 31.844244083133816], ["2025-10-20", 33.425366674690885], ["2025-10-27", 36.25779846135667], ["2025-11-03", 36.28469311600268], ["2025-11-10", 34.90881920463879], ["2025-11-17", 32.92710780967022], ["2025-11-24", 34.70073950816708], ["2025-12-01", 34.17841700477894], ["2025-12-08", 33.70563728626501], ["2025-12-15", 33.869836230419544], ["2025-12-22", 34.60165393841866], ["2025-12-29", 33.749518038582174], ["2026-01-05", 34.97299470386196], ["2026-01-12", 33.85895969161163], ["2026-01-20", 33.864354534285965], ["2026-01-26", 33.883236483646144], ["2026-02-02", 29.974672966089905], ["2026-02-09", 28.419609565212628], ["2026-02-17", 29.94635004204964], ["2026-02-23", 29.931514224695217], ["2026-03-02", 30.364450349310662], ["2026-03-09", 29.61726463891516], ["2026-03-16", 29.307061185140856], ["2026-03-23", 28.493788651984744], ["2026-03-30", 29.900493879317786], ["2026-04-06", 31.606476426369785], ["2026-04-13", 33.14445609562314], ["2026-04-20", 34.840274400883615], ["2026-04-27", 35.37945118148392], ["2026-05-04", 35.93756859840509], ["2026-05-11", 34.85921503720447], ["2026-05-18", 35.13448561840088], ["2026-05-26", 35.67997594444148], ["2026-06-01", 32.57244887873335], ["2026-06-08", 31.627942480866757], ["2026-06-15", 32.36536458829201], ["2026-06-22", 30.88799495526539], ["2026-06-29", 32.148178625146215], ["2026-07-06", 29.611588395877583], ["2026-07-13", 29.829128653806983], ["2026-07-20", 28.088806590371778], ["2026-07-27", 32.63182986046355], ["2026-08-03", 32.71]], "META": [["2025-08-11", 25.69478227743298], ["2025-08-18", 24.709569604468935], ["2025-08-25", 24.18880508712362], ["2025-09-02", 24.63383380766421], ["2025-09-08", 24.735462184573116], ["2025-09-15", 25.47307706029094], ["2025-09-22", 24.352251999031253], ["2025-09-29", 23.278033581959086], ["2025-10-06", 22.20909872998962], ["2025-10-13", 22.570406316574577], ["2025-10-20", 23.237495528310642], ["2025-10-27", 20.4375561509097], ["2025-11-03", 19.60886617186336], ["2025-11-10", 19.227805652219306], ["2025-11-17", 18.754668468236765], ["2025-11-24", 20.425113358431528], ["2025-12-01", 21.21740816947921], ["2025-12-08", 20.309395388384516], ["2025-12-15", 20.761690894966115], ["2025-12-22", 20.902294449969474], ["2025-12-29", 20.501636532172295], ["2026-01-05", 20.24271597217085], ["2026-01-12", 19.239021279315168], ["2026-01-20", 20.4170853641025], ["2026-01-26", 22.183416713248715], ["2026-02-02", 20.4996813918596], ["2026-02-09", 19.83615996887759], ["2026-02-17", 20.3222528877888], ["2026-02-23", 20.093431299780246], ["2026-03-02", 19.991868776760413], ["2026-03-09", 19.038955345414646], ["2026-03-16", 18.42560336151472], ["2026-03-23", 16.34724257417503], ["2026-03-30", 17.838253830797587], ["2026-04-06", 18.360708756656848], ["2026-04-13", 20.048349319063018], ["2026-04-20", 19.659579504721027], ["2026-04-27", 17.753543473385314], ["2026-05-04", 17.778991793332995], ["2026-05-11", 17.911265546733375], ["2026-05-18", 17.79710754651609], ["2026-05-26", 18.43690994068098], ["2026-06-01", 17.30079341962683], ["2026-06-08", 16.552584058001198], ["2026-06-15", 16.847036935135957], ["2026-06-22", 16.071510167916767], ["2026-06-29", 17.01036626542165], ["2026-07-06", 19.865802809624743], ["2026-07-13", 19.185897320881313], ["2026-07-20", 17.69655262528041], ["2026-07-27", 16.568847314640447], ["2026-08-03", 17.54]], "KO": [["2025-08-11", 24.982842610621674], ["2025-08-18", 25.05151074719486], ["2025-08-25", 24.678740862940415], ["2025-09-02", 24.341940002605256], ["2025-09-08", 24.03129843239322], ["2025-09-15", 23.84164357900061], ["2025-09-22", 23.593130322830977], ["2025-09-29", 21.507512443332196], ["2025-10-06", 21.622207877697882], ["2025-10-13", 22.03393507798496], ["2025-10-20", 22.407430466816812], ["2025-10-27", 22.169216872365006], ["2025-11-03", 22.65446678698906], ["2025-11-10", 22.833862209971294], ["2025-11-17", 23.36028484462406], ["2025-11-24", 23.41028029037321], ["2025-12-01", 22.49271681544771], ["2025-12-08", 22.645644061268627], ["2025-12-15", 22.510362266888585], ["2025-12-22", 22.454485003992485], ["2025-12-29", 22.233916860981548], ["2026-01-05", 24.070828885622003], ["2026-01-12", 24.048944098017728], ["2026-01-20", 24.811785265938088], ["2026-01-26", 25.41518012417018], ["2026-02-02", 26.7345201768849], ["2026-02-09", 26.62509623886354], ["2026-02-17", 26.987758433448626], ["2026-02-23", 27.525498928867897], ["2026-03-02", 26.112366929277723], ["2026-03-09", 26.206158876153175], ["2026-03-16", 25.396421734795087], ["2026-03-23", 25.696555964796538], ["2026-03-30", 26.012322185943905], ["2026-04-06", 24.976385690444616], ["2026-04-13", 24.461698220496473], ["2026-04-20", 24.726479635672103], ["2026-04-27", 25.306618691393997], ["2026-05-04", 25.259017538103997], ["2026-05-11", 25.973034837454016], ["2026-05-18", 26.169389594775275], ["2026-05-26", 25.434546790860875], ["2026-06-01", 25.574375178650257], ["2026-06-08", 26.508547811966537], ["2026-06-15", 25.547599529924632], ["2026-06-22", 26.511522884047157], ["2026-06-29", 26.96075876822155], ["2026-07-06", 26.06098265100781], ["2026-07-13", 25.501946698470448], ["2026-07-20", 25.7018092929009], ["2026-07-27", 27.24857198023226], ["2026-08-03", 27.03]], "PG": [["2025-08-11", 18.770841872847296], ["2025-08-18", 19.260710656212407], ["2025-08-25", 19.07544705600704], ["2025-09-02", 19.414149834296612], ["2025-09-08", 19.1731934953792], ["2025-09-15", 18.961788405574296], ["2025-09-22", 18.559436783042393], ["2025-09-29", 18.533295293442865], ["2025-10-06", 18.187585799678207], ["2025-10-13", 18.381382997757193], ["2025-10-20", 18.504914545070697], ["2025-10-27", 18.26465135213067], ["2025-11-03", 17.880456906816185], ["2025-11-10", 17.958655776216478], ["2025-11-17", 18.326983784261333], ["2025-11-24", 18.014188306660163], ["2025-12-01", 17.480396024232082], ["2025-12-08", 17.411263690414433], ["2025-12-15", 17.594861035962946], ["2025-12-22", 17.626593910502194], ["2025-12-29", 17.292265410892245], ["2026-01-05", 17.623556902021356], ["2026-01-12", 17.930633730409735], ["2026-01-20", 18.5794201121927], ["2026-01-26", 18.766436827226222], ["2026-02-02", 19.620710710712686], ["2026-02-09", 19.724608885731314], ["2026-02-17", 19.806573001579338], ["2026-02-23", 20.547713316712194], ["2026-03-02", 18.981159722264714], ["2026-03-09", 18.63714132053638], ["2026-03-16", 17.901773126237895], ["2026-03-23", 17.720528532038742], ["2026-03-30", 17.767859922880557], ["2026-04-06", 17.987282438823], ["2026-04-13", 18.191433012742518], ["2026-04-20", 18.335607146866472], ["2026-04-27", 18.22949498415124], ["2026-05-04", 18.132609966019945], ["2026-05-11", 17.573214325619016], ["2026-05-18", 17.90423813756761], ["2026-05-26", 17.802739547144345], ["2026-06-01", 18.146450682895846], ["2026-06-08", 18.500542356304273], ["2026-06-15", 18.589353622924627], ["2026-06-22", 18.432492164997768], ["2026-06-29", 18.70815310944276], ["2026-07-06", 18.57745782572412], ["2026-07-13", 18.92350973965971], ["2026-07-20", 18.62100857679765], ["2026-07-27", 18.277310757514687], ["2026-08-03", 18.57]], "JNJ": [["2025-08-11", 21.00608431697191], ["2025-08-18", 21.30159268225117], ["2025-08-25", 21.065185990027764], ["2025-09-02", 21.205691854273752], ["2025-09-08", 21.164432195725325], ["2025-09-15", 20.955903651169773], ["2025-09-22", 21.348427970333162], ["2025-09-29", 20.435958836094628], ["2025-10-06", 20.64809600151678], ["2025-10-13", 20.903068556110714], ["2025-10-20", 20.615459514528755], ["2025-10-27", 20.459416311117273], ["2025-11-03", 20.224841560890855], ["2025-11-10", 21.179458805290533], ["2025-11-17", 21.992311309335985], ["2025-11-24", 22.300318155285453], ["2025-12-01", 21.79139293631597], ["2025-12-08", 22.775586997048542], ["2025-12-15", 22.24422419327479], ["2025-12-22", 22.37273036079013], ["2025-12-29", 22.34417343467561], ["2026-01-05", 20.4129795900776], ["2026-01-12", 21.760784919459926], ["2026-01-20", 21.90057131662081], ["2026-01-26", 22.572112724603176], ["2026-02-02", 23.775409143407018], ["2026-02-09", 24.10220707190476], ["2026-02-17", 24.01153481428689], ["2026-02-23", 24.572569408297472], ["2026-03-02", 23.814133753431317], ["2026-03-09", 23.9199180539855], ["2026-03-16", 23.33904890362101], ["2026-03-23", 23.818856266848915], ["2026-03-30", 24.06348246188046], ["2026-04-06", 23.48363853712249], ["2026-04-13", 23.08191055289036], ["2026-04-20", 22.454914540116846], ["2026-04-27", 22.42581741976358], ["2026-05-04", 21.874849366622787], ["2026-05-11", 22.380763814055307], ["2026-05-18", 23.096928421459786], ["2026-05-26", 22.251234697644012], ["2026-06-01", 22.9495655861223], ["2026-06-08", 23.709845182449467], ["2026-06-15", 22.538451434034272], ["2026-06-22", 25.004197729776827], ["2026-06-29", 25.79075859610049], ["2026-07-06", 24.774235489385976], ["2026-07-13", 24.410985155701443], ["2026-07-20", 25.3661307031562], ["2026-07-27", 24.71615231420292], ["2026-08-03", 24.77]], "UNH": [["2025-08-11", 10.339674154798049], ["2025-08-18", 10.440382200900162], ["2025-08-25", 10.512738421706667], ["2025-09-02", 10.675761417156423], ["2025-09-08", 11.772031995253332], ["2025-09-15", 11.304817540902764], ["2025-09-22", 11.523067529376261], ["2025-09-29", 11.999141929131707], ["2025-10-06", 13.802678272109876], ["2025-10-13", 13.875034885093145], ["2025-10-20", 14.078322512046135], ["2025-10-27", 13.356823714012975], ["2025-11-03", 12.759020268651211], ["2025-11-10", 12.678049773169937], ["2025-11-17", 12.612928821484994], ["2025-11-24", 12.95059301540691], ["2025-12-01", 12.989872319597831], ["2025-12-08", 13.366471262410744], ["2025-12-15", 12.869622519925636], ["2025-12-22", 13.0215714071905], ["2025-12-29", 13.179033179254088], ["2026-01-05", 18.679788656819238], ["2026-01-12", 18.059162656194893], ["2026-01-20", 19.267850947534274], ["2026-01-26", 15.94778917104619], ["2026-02-02", 15.455502497711452], ["2026-02-09", 16.247566853446532], ["2026-02-17", 16.094804743724954], ["2026-02-23", 16.25139787814174], ["2026-03-02", 15.926239657135628], ["2026-03-09", 15.716012176985867], ["2026-03-16", 15.404741420499894], ["2026-03-23", 14.611240430504111], ["2026-03-30", 15.484714061012443], ["2026-04-06", 16.895969549738254], ["2026-04-13", 17.874750086037697], ["2026-04-20", 19.335206364092382], ["2026-04-27", 20.00347721301407], ["2026-05-04", 20.54349406062756], ["2026-05-11", 21.2122470674489], ["2026-05-18", 20.952846117434564], ["2026-05-26", 20.559405271316166], ["2026-06-01", 21.48321980705495], ["2026-06-08", 21.91957270624263], ["2026-06-15", 21.555061334103527], ["2026-06-22", 22.853512557874172], ["2026-06-29", 22.731526609261483], ["2026-07-06", 19.721179037944268], ["2026-07-13", 19.782766612860307], ["2026-07-20", 19.55862135721351], ["2026-07-27", 19.292998755194684], ["2026-08-03", 18.99]], "0700": [["2025-08-11", 23.208840520113636], ["2025-08-18", 23.526152024538412], ["2025-08-25", 23.387328241352574], ["2025-09-01", 23.74430368383045], ["2025-09-08", 25.251533329848147], ["2025-09-15", 25.21186939179505], ["2025-09-22", 25.271365298874695], ["2025-09-29", 26.44145147144107], ["2025-10-06", 24.464096935003806], ["2025-10-13", 22.813263830241798], ["2025-10-20", 23.932794326574655], ["2025-10-27", 23.610217742885524], ["2025-11-03", 23.799968674467365], ["2025-11-10", 24.06561997868194], ["2025-11-17", 22.889164202874536], ["2025-11-24", 22.946089482349088], ["2025-12-01", 22.889164202874536], ["2025-12-08", 23.116865320772742], ["2025-12-15", 23.040964948140008], ["2025-12-22", 22.62351289865996], ["2025-12-29", 23.382516624987318], ["2026-01-05", 21.726882320520936], ["2026-01-12", 21.960645057423445], ["2026-01-19", 21.15146635276091], ["2026-01-26", 21.547064830595925], ["2026-02-02", 19.443200198473328], ["2026-02-09", 18.885765979705802], ["2026-02-16", 18.526130999855784], ["2026-02-23", 18.38227700791578], ["2026-03-02", 18.41824050590078], ["2026-03-09", 19.443200198473328], ["2026-03-16", 18.02264202806576], ["2026-03-23", 17.497574957484737], ["2026-03-30", 17.34652826594773], ["2026-04-08", 17.48977183383574], ["2026-04-13", 17.700645655756606], ["2026-04-20", 17.09965526328214], ["2026-04-27", 16.199926956419784], ["2026-05-04", 16.3264512495723], ["2026-05-11", 15.79926669477014], ["2026-05-18", 15.272082139967976], ["2026-05-26", 14.773014094755263], ["2026-06-01", 15.686800656412345], ["2026-06-08", 16.052315281075177], ["2026-06-15", 15.229907375583803], ["2026-06-22", 14.231771285158375], ["2026-06-29", 14.913596642702506], ["2026-07-06", 15.93282011532002], ["2026-07-13", 15.982024007101556], ["2026-07-20", 15.033091808457662], ["2026-07-27", 16.46000467012218], ["2026-08-03", 13.91]], "1810": [["2025-08-11", 40.890354926810964], ["2025-08-18", 40.64537457497816], ["2025-08-25", 40.890354926810964], ["2025-09-01", 41.54363586503177], ["2025-09-08", 42.768537624195766], ["2025-09-15", 44.03426944199857], ["2025-09-22", 42.360237037807764], ["2025-09-29", 42.64604744827936], ["2025-10-06", 35.55845704315474], ["2025-10-13", 31.163609560295175], ["2025-10-20", 31.134743566975903], ["2025-10-27", 29.171856021265224], ["2025-11-03", 28.47907218160263], ["2025-11-10", 28.565670161560455], ["2025-11-17", 25.477008876398056], ["2025-11-24", 27.59865938536475], ["2025-12-01", 28.868763091412834], ["2025-12-08", 28.99866006134957], ["2025-12-15", 27.25226746553345], ["2025-12-22", 26.299689685997386], ["2025-12-29", 27.064638508958165], ["2026-01-05", 27.777342711239147], ["2026-01-12", 27.20663790747984], ["2026-01-19", 26.524962725211783], ["2026-01-26", 25.938405010236938], ["2026-02-02", 25.684758430788357], ["2026-02-09", 27.00055006167787], ["2026-02-16", 25.827434631728185], ["2026-02-23", 25.462817673770846], ["2026-03-02", 24.289702243821164], ["2026-03-09", 24.210437687743486], ["2026-03-16", 24.115320220450265], ["2026-03-23", 23.9567911082949], ["2026-03-30", 22.276382519448056], ["2026-04-08", 27.155096220488776], ["2026-04-13", 28.217206083469737], ["2026-04-20", 27.444762546756312], ["2026-04-27", 25.339853909212223], ["2026-05-04", 27.908228668784364], ["2026-05-11", 26.96198533631042], ["2026-05-18", 26.28609724168617], ["2026-05-26", 24.393610576738276], ["2026-06-01", 24.16187751572425], ["2026-06-08", 22.616990442297396], ["2026-06-15", 21.052792280452707], ["2026-06-22", 18.001640310434674], ["2026-06-29", 19.488594118608024], ["2026-07-06", 22.269390850776357], ["2026-07-13", 23.273567448503808], ["2026-07-20", 23.119078741161125], ["2026-07-27", 25.108120848198197], ["2026-08-03", 20.23]], "9992": [["2025-08-11", 31.563030255248172], ["2025-08-18", 37.52971148611208], ["2025-08-25", 37.7732494955351], ["2025-09-01", 36.21460623522779], ["2025-09-08", 32.22058288069032], ["2025-09-15", 31.563030255248172], ["2025-09-22", 30.90547762980603], ["2025-09-29", 29.541664777037138], ["2025-10-06", 30.126155999652376], ["2025-10-13", 32.050106274094205], ["2025-10-20", 26.570501062076332], ["2025-10-27", 25.49893382061506], ["2025-11-03", 23.45321454146172], ["2025-11-10", 24.865734996115215], ["2025-11-17", 22.783485015548425], ["2025-11-24", 25.888594635691888], ["2025-12-01", 25.182334408365136], ["2025-12-08", 22.15028619104858], ["2025-12-15", 22.004163385394772], ["2025-12-22", 22.89307711978878], ["2025-12-29", 22.02851718633707], ["2026-01-05", 11.418811078186451], ["2026-01-12", 10.281898653993066], ["2026-01-19", 12.815236120945714], ["2026-01-26", 13.062390995770363], ["2026-02-02", 14.273449882411139], ["2026-02-09", 14.532962500977021], ["2026-02-16", 14.347596344858534], ["2026-02-23", 13.445481051748569], ["2026-03-02", 12.06141375273054], ["2026-03-09", 11.900763084094516], ["2026-03-16", 12.197348933884093], ["2026-03-23", 8.490025811514364], ["2026-03-30", 8.008073805606301], ["2026-04-08", 8.570351145832378], ["2026-04-13", 9.077018639222905], ["2026-04-20", 8.916367970586885], ["2026-04-27", 8.959620073681197], ["2026-05-04", 9.633117107578364], ["2026-05-11", 8.66303422389162], ["2026-05-18", 8.545635658349912], ["2026-05-26", 9.960597316721024], ["2026-06-01", 10.145963472839512], ["2026-06-08", 10.55376901630018], ["2026-06-15", 9.39831997649495], ["2026-06-22", 9.039945407999209], ["2026-06-29", 8.718644070727166], ["2026-07-06", 8.557993402091144], ["2026-07-13", 9.355067873400634], ["2026-07-20", 9.188238332893999], ["2026-07-27", 9.293279154694472], ["2026-08-03", 10.02]], "1211": [["2025-08-11", 22.215433812638363], ["2025-08-18", 22.506077748812963], ["2025-08-25", 22.525454011224603], ["2025-09-01", 20.820342919000293], ["2025-09-08", 20.607204032472254], ["2025-09-15", 22.351067649519845], ["2025-09-22", 20.99472928070505], ["2025-09-29", 21.55664089064261], ["2025-10-06", 23.698393187806673], ["2025-10-13", 22.621710629508055], ["2025-10-20", 22.793979838835835], ["2025-10-27", 22.061835699192777], ["2025-11-03", 21.480427117711525], ["2025-11-10", 22.061835699192777], ["2025-11-17", 20.37144408266395], ["2025-11-24", 21.394292513047635], ["2025-12-01", 21.74959775728618], ["2025-12-08", 21.609629024707356], ["2025-12-15", 20.576013768740687], ["2025-12-22", 20.554480117574712], ["2025-12-29", 21.66346315262229], ["2026-01-05", 25.597428143152673], ["2026-01-12", 26.83212257050521], ["2026-01-19", 26.938332843825858], ["2026-01-26", 26.44711032971786], ["2026-02-02", 24.999995355724028], ["2026-02-09", 26.44711032971786], ["2026-02-16", 25.836401258124134], ["2026-02-23", 25.70363841647332], ["2026-03-02", 25.637256995647917], ["2026-03-09", 26.18158464641624], ["2026-03-16", 28.053540713692662], ["2026-03-23", 28.77046005860704], ["2026-03-30", 28.080093282022826], ["2026-04-08", 29.88377422603509], ["2026-04-13", 31.644062121990316], ["2026-04-20", 28.794072195205665], ["2026-04-27", 29.15730620548214], ["2026-05-04", 28.388926568358826], ["2026-05-11", 27.46687100381085], ["2026-05-18", 26.111728734702464], ["2026-05-26", 26.02790550156174], ["2026-06-01", 25.580848258144538], ["2026-06-08", 24.700704310166927], ["2026-06-15", 23.10806288049315], ["2026-06-22", 20.81689450798], ["2026-06-29", 24.016147906184337], ["2026-07-06", 24.23967652789294], ["2026-07-13", 25.30143748100879], ["2026-07-20", 25.287466942152], ["2026-07-27", 26.82422621639863], ["2026-08-03", 25.33]]} },
+      '3y': { pe: {"AAPL": [["2023-12-30", 29.9891], ["2024-03-30", 26.6687], ["2024-06-29", 32.0578], ["2024-09-28", 37.4655], ["2024-12-28", 40.5698], ["2025-03-29", 33.9408], ["2025-06-28", 30.5129], ["2025-09-27", 34.244], ["2025-12-27", 34.5638], ["2026-03-28", 30.0846], ["2026-06-27", 32.5436], ["2026-08-07", 35.83886060850235]], "MSFT": [["2023-12-31", 34.0], ["2024-03-31", 36.426], ["2024-06-30", 37.8771], ["2024-09-30", 35.5033], ["2024-12-31", 33.9372], ["2025-03-31", 29.01], ["2025-06-30", 36.467], ["2025-09-30", 36.8385], ["2025-12-31", 30.2452], ["2026-03-31", 22.0339], ["2026-06-30", 20.7811], ["2026-08-07", 27.84735376044568]], "GOOGL": [["2023-12-31", 24.0845], ["2024-03-31", 23.1488], ["2024-06-30", 26.1334], ["2024-09-30", 21.996], ["2024-12-31", 23.5155], ["2025-03-31", 17.2397], ["2025-06-30", 18.7678], ["2025-09-30", 23.9744], ["2025-12-31", 28.9279], ["2026-03-31", 21.9344], ["2026-06-30", 17.9493], ["2026-08-07", 17.949802868265607]], "AMZN": [["2023-12-31", 52.3931], ["2024-03-31", 50.5266], ["2024-06-30", 46.2321], ["2024-09-30", 39.8994], ["2024-12-31", 39.6727], ["2025-03-31", 31.0375], ["2025-06-30", 33.4947], ["2025-09-30", 31.0127], ["2025-12-31", 32.1925], ["2026-03-31", 24.8829], ["2026-06-30", 19.1592], ["2026-08-07", 21.89308877661169]], "META": [["2023-12-31", 23.8036], ["2024-03-31", 27.8909], ["2024-06-30", 25.7386], ["2024-09-30", 26.9637], ["2024-12-31", 24.5394], ["2025-03-31", 22.4789], ["2025-06-30", 26.723], ["2025-09-30", 32.4373], ["2025-12-31", 28.1009], ["2026-03-31", 20.7972], ["2026-06-30", 21.2162], ["2026-08-07", 22.22883506095106]], "KO": [["2023-12-31", 23.8583], ["2024-03-29", 24.472], ["2024-06-28", 25.7692], ["2024-09-27", 29.6653], ["2024-12-31", 25.3089], ["2025-03-28", 28.148], ["2025-06-27", 24.9397], ["2025-09-26", 21.745], ["2025-12-31", 22.9967], ["2026-04-03", 24.1258], ["2026-07-03", 25.2673], ["2026-08-07", 26.101719467675192]], "PG": [["2023-12-31", 24.5461], ["2024-03-31", 26.5114], ["2024-06-30", 27.3953], ["2024-09-30", 29.8621], ["2024-12-31", 26.6959], ["2025-03-31", 27.0508], ["2025-06-30", 24.4731], ["2025-09-30", 22.4307], ["2025-12-31", 21.2311], ["2026-03-31", 21.117], ["2026-06-30", 22.1511], ["2026-08-07", 22.188387669494627]], "JNJ": [["2023-12-31", 11.4242], ["2024-03-31", 10.4004], ["2024-06-30", 9.62846], ["2024-09-29", 26.5461], ["2024-12-31", 24.7505], ["2025-03-31", 18.3022], ["2025-06-30", 16.2241], ["2025-09-28", 17.2147], ["2025-12-31", 18.7625], ["2026-03-31", 28.259], ["2026-06-30", 29.4287], ["2026-08-07", 29.78832415464705]], "UNH": [["2023-12-31", 22.065], ["2024-03-31", 30.2384], ["2024-06-30", 33.7706], ["2024-09-30", 38.0899], ["2024-12-31", 32.6151], ["2025-03-31", 21.9326], ["2025-06-30", 13.5169], ["2025-09-30", 18.0219], ["2025-12-31", 24.9516], ["2026-03-31", 20.4373], ["2026-06-30", 26.7458], ["2026-08-07", 26.006204227854184]], "0700": [["2023-09-30", 13.803], ["2023-12-31", 21.634], ["2024-03-31", 19.884], ["2024-06-30", 20.897], ["2024-09-30", 21.731], ["2024-12-31", 18.44], ["2025-03-31", 21.121], ["2025-06-30", 20.021], ["2025-09-30", 25.202], ["2025-12-31", 21.625], ["2026-03-31", 16.343], ["2026-08-07", 16.644509626835163]], "1810": [["2023-09-30", 18.1], ["2023-12-31", 20.295], ["2024-03-31", 19.696], ["2024-06-30", 20.262], ["2024-09-30", 26.175], ["2024-12-31", 34.388], ["2025-03-31", 39.114], ["2025-06-30", 38.156], ["2025-09-30", 29.14], ["2025-12-31", 21.976], ["2026-03-31", 20.393], ["2026-08-07", 17.882413236052674]], "9988": [["2023-09-30", 12.161], ["2023-12-31", 13.981], ["2024-03-31", 16.425], ["2024-06-30", 18.158], ["2024-09-30", 20.171], ["2024-12-31", 11.65], ["2025-03-31", 17.115], ["2025-06-30", 12.436], ["2025-09-30", 23.03], ["2025-12-31", 25.094], ["2026-03-31", 18.597], ["2026-08-07", 18.85147]], "9618": [["2023-09-30", 14.042], ["2023-12-31", 13.338], ["2024-03-31", 12.394], ["2024-06-30", 9.22], ["2024-09-30", 11.772], ["2024-12-31", 8.869], ["2025-03-31", 9.599], ["2025-06-30", 8.72], ["2025-09-30", 10.967], ["2025-12-31", 14.51], ["2026-03-31", 20.2], ["2026-08-07", 22.09167]], "9992": [["2023-09-30", 33.749], ["2023-12-31", 22.574], ["2024-03-31", 26.929], ["2024-06-30", 30.877], ["2024-09-30", 27.41], ["2024-12-31", 35.75], ["2025-03-31", 39.095], ["2025-06-30", 47.671], ["2025-09-30", 33.162], ["2025-12-31", 17.535], ["2026-08-07", 14.755098000956556]], "1211": [["2023-09-30", 23.558], ["2023-12-31", 19.053], ["2024-03-31", 18.768], ["2024-06-30", 21.095], ["2024-09-30", 24.704], ["2024-12-31", 19.54], ["2025-03-31", 25.16], ["2025-06-30", 24.132], ["2025-09-30", 25.146], ["2025-12-31", 26.154], ["2026-03-31", 33.437], ["2026-08-07", 26.412133551576055]]}, evebit: {"AAPL": [["2023-12-30", 25.3796], ["2024-03-30", 22.5604], ["2024-06-29", 26.9136], ["2024-09-28", 28.2829], ["2024-12-28", 30.9312], ["2025-03-29", 25.949], ["2025-06-28", 23.2979], ["2025-09-27", 28.6955], ["2025-12-27", 28.6618], ["2026-03-28", 24.8736], ["2026-06-27", 26.9127], ["2026-08-07", 29.04058]], "MSFT": [["2023-12-31", 27.8723], ["2024-03-31", 29.5673], ["2024-06-30", 30.2853], ["2024-09-30", 28.1436], ["2024-12-31", 26.544], ["2025-03-31", 22.6938], ["2025-06-30", 28.5056], ["2025-09-30", 28.0202], ["2025-12-31", 24.9788], ["2026-03-31", 18.3186], ["2026-06-30", 17.7174], ["2026-08-07", 24.24488]], "GOOGL": [["2023-12-31", 19.6215], ["2024-03-31", 19.3369], ["2024-06-30", 22.1436], ["2024-09-30", 18.691], ["2024-12-31", 19.9169], ["2025-03-31", 15.3746], ["2025-06-30", 17.0841], ["2025-09-30", 23.14], ["2025-12-31", 28.7974], ["2026-03-31", 24.9602], ["2026-06-30", 28.8491], ["2026-08-07", 28.81296]], "AMZN": [["2023-12-31", 44.1339], ["2024-03-31", 40.648], ["2024-06-30", 38.088], ["2024-09-30", 33.0889], ["2024-12-31", 34.3139], ["2025-03-31", 28.7053], ["2025-06-30", 31.2306], ["2025-09-30", 31.2715], ["2025-12-31", 31.3459], ["2026-03-31", 27.0016], ["2026-06-30", 28.4944], ["2026-08-07", 32.7101]], "META": [["2023-12-31", 18.7872], ["2024-03-31", 22.7106], ["2024-06-30", 21.3803], ["2024-09-30", 22.8046], ["2024-12-31", 20.9704], ["2025-03-31", 19.6051], ["2025-06-30", 23.625], ["2025-09-30", 22.6874], ["2025-12-31", 20.0818], ["2026-03-31", 16.4534], ["2026-06-30", 16.7649], ["2026-08-07", 17.54152]], "KO": [["2023-12-31", 25.0915], ["2024-03-29", 28.8261], ["2024-06-28", 29.144], ["2024-09-27", 35.4909], ["2024-12-31", 29.9549], ["2025-03-28", 29.5177], ["2025-06-27", 25.7977], ["2025-09-26", 21.6109], ["2025-12-31", 24.164], ["2026-04-03", 25.0517], ["2026-07-03", 26.3492], ["2026-08-07", 27.03423]], "PG": [["2023-12-31", 19.9814], ["2024-03-31", 21.7385], ["2024-06-30", 22.2579], ["2024-09-30", 23.3174], ["2024-12-31", 21.0549], ["2025-03-31", 21.302], ["2025-06-30", 19.5155], ["2025-09-30", 18.7648], ["2025-12-31", 17.9654], ["2026-03-31", 17.965], ["2026-06-30", 18.5307], ["2026-08-07", 18.56922]], "JNJ": [["2023-12-31", 17.686], ["2024-03-31", 17.4552], ["2024-06-30", 16.5114], ["2024-09-29", 18.6489], ["2024-12-31", 17.1214], ["2025-03-31", 19.4869], ["2025-06-30", 18.4867], ["2025-09-28", 19.4528], ["2025-12-31", 20.6214], ["2026-03-31", 24.0851], ["2026-06-30", 24.4805], ["2026-08-07", 24.77424]], "UNH": [["2023-12-31", 15.3477], ["2024-03-31", 14.4506], ["2024-06-30", 14.9559], ["2024-09-30", 17.0661], ["2024-12-31", 14.6435], ["2025-03-31", 14.5405], ["2025-06-30", 9.50871], ["2025-09-30", 12.2498], ["2025-12-31", 16.171], ["2026-03-31", 13.4395], ["2026-06-30", 17.4796], ["2026-08-07", 18.98902]], "0700": [["2023-09-30", 18.349], ["2023-12-31", 15.731], ["2024-03-31", 15.035], ["2024-06-30", 16.752], ["2024-09-30", 18.667], ["2024-12-31", 17.496], ["2025-03-31", 19.906], ["2025-06-30", 19.211], ["2025-09-30", 24.132], ["2025-12-31", 20.095], ["2026-03-31", 15.541], ["2026-08-07", 13.91069]], "1810": [["2023-09-30", 17.313], ["2023-12-31", 19.166], ["2024-03-31", 15.518], ["2024-06-30", 15.882], ["2024-09-30", 22.845], ["2024-12-31", 32.553], ["2025-03-31", 39.747], ["2025-06-30", 41.172], ["2025-09-30", 33.592], ["2025-12-31", 25.692], ["2026-03-31", 24.491], ["2026-08-07", 20.2302]], "9988": [["2023-09-30", 10.322], ["2023-12-31", 9.071], ["2024-03-31", 7.357], ["2024-06-30", 7.683], ["2024-09-30", 12.159], ["2024-12-31", 9.101], ["2025-03-31", 13.983], ["2025-06-30", 11.834], ["2025-09-30", 23.846], ["2025-12-31", 24.976], ["2026-03-31", 31.501], ["2026-08-07", 30.79735]], "9618": [["2023-06-30", 12.432], ["2023-09-30", 8.717], ["2023-12-31", 7.576], ["2024-03-31", 8.223], ["2024-06-30", 7.293], ["2024-09-30", 9.934], ["2024-12-31", 8.356], ["2025-03-31", 7.174], ["2025-06-30", 7.601], ["2025-09-30", 14.205], ["2025-12-31", 54.745], ["2026-08-07", 42.43496]], "9992": [["2023-09-30", 25.813], ["2023-12-31", 16.06], ["2024-03-31", 19.572], ["2024-06-30", 22.876], ["2024-09-30", 19.189], ["2024-12-31", 25.154], ["2025-03-31", 28.205], ["2025-06-30", 35.231], ["2025-09-30", 24.033], ["2025-12-31", 12.454], ["2026-08-07", 10.02286]], "1211": [["2023-09-30", 18.021], ["2023-12-31", 15.756], ["2024-03-31", 14.708], ["2024-06-30", 17.232], ["2024-09-30", 19.337], ["2024-12-31", 15.171], ["2025-03-31", 19.523], ["2025-06-30", 19.501], ["2025-09-30", 20.827], ["2025-12-31", 23.138], ["2026-03-31", 28.346], ["2026-08-07", 25.32785]]} },
+      '5y': { pe: {"AAPL": [["2021-12-25", 29.1854], ["2022-03-26", 28.3636], ["2022-06-25", 23.3762], ["2022-09-24", 24.6203], ["2022-12-31", 22.0594], ["2023-04-01", 27.9966], ["2023-07-01", 32.6], ["2023-09-30", 27.9299], ["2023-12-30", 29.9891], ["2024-03-30", 26.6687], ["2024-06-29", 32.0578], ["2024-09-28", 37.4655], ["2024-12-28", 40.5698], ["2025-03-29", 33.9408], ["2025-06-28", 30.5129], ["2025-09-27", 34.244], ["2025-12-27", 34.5638], ["2026-03-28", 30.0846], ["2026-06-27", 32.5436], ["2026-08-07", 35.83886060850235]], "MSFT": [["2021-12-31", 35.8168], ["2022-03-31", 32.1827], ["2022-06-30", 26.6145], ["2022-09-30", 25.097], ["2022-12-31", 26.6467], ["2023-03-31", 31.2351], ["2023-06-30", 35.1798], ["2023-09-30", 30.5663], ["2023-12-31", 34.0], ["2024-03-31", 36.426], ["2024-06-30", 37.8771], ["2024-09-30", 35.5033], ["2024-12-31", 33.9372], ["2025-03-31", 29.01], ["2025-06-30", 36.467], ["2025-09-30", 36.8385], ["2025-12-31", 30.2452], ["2026-03-31", 22.0339], ["2026-06-30", 20.7811], ["2026-08-07", 27.84735376044568]], "GOOGL": [["2021-12-31", 25.8203], ["2022-03-31", 25.1934], ["2022-06-30", 20.2911], ["2022-09-30", 19.0159], ["2022-12-31", 19.3487], ["2023-03-31", 23.1025], ["2023-06-30", 25.3602], ["2023-09-30", 25.1171], ["2023-12-31", 24.0845], ["2024-03-31", 23.1488], ["2024-06-30", 26.1334], ["2024-09-30", 21.996], ["2024-12-31", 23.5155], ["2025-03-31", 17.2397], ["2025-06-30", 18.7678], ["2025-09-30", 23.9744], ["2025-12-31", 28.9279], ["2026-03-31", 21.9344], ["2026-06-30", 17.9493], ["2026-08-07", 17.949802868265607]], "AMZN": [["2021-12-31", 51.4568], ["2022-03-31", 78.3654], ["2022-06-30", 93.9912], ["2022-09-30", 102.727], ["2023-03-31", 245.929], ["2023-06-30", 102.646], ["2023-09-30", 65.8653], ["2023-12-31", 52.3931], ["2024-03-31", 50.5266], ["2024-06-30", 46.2321], ["2024-09-30", 39.8994], ["2024-12-31", 39.6727], ["2025-03-31", 31.0375], ["2025-06-30", 33.4947], ["2025-09-30", 31.0127], ["2025-12-31", 32.1925], ["2026-03-31", 24.8829], ["2026-06-30", 19.1592], ["2026-08-07", 21.89308877661169]], "META": [["2021-12-31", 24.4263], ["2022-03-31", 16.82], ["2022-06-30", 13.3596], ["2022-09-30", 12.9342], ["2022-12-31", 14.0093], ["2023-03-31", 26.2953], ["2023-06-30", 33.4476], ["2023-09-30", 26.4969], ["2023-12-31", 23.8036], ["2024-03-31", 27.8909], ["2024-06-30", 25.7386], ["2024-09-30", 26.9637], ["2024-12-31", 24.5394], ["2025-03-31", 22.4789], ["2025-06-30", 26.723], ["2025-09-30", 32.4373], ["2025-12-31", 28.1009], ["2026-03-31", 20.7972], ["2026-06-30", 21.2162], ["2026-08-07", 22.22883506095106]], "KO": [["2021-12-31", 26.3156], ["2022-04-01", 26.416], ["2022-07-01", 29.1312], ["2022-09-30", 24.4629], ["2022-12-31", 29.0457], ["2023-03-31", 27.2061], ["2023-06-30", 24.7819], ["2023-09-29", 22.4819], ["2023-12-31", 23.8583], ["2024-03-29", 24.472], ["2024-06-28", 25.7692], ["2024-09-27", 29.6653], ["2024-12-31", 25.3089], ["2025-03-28", 28.148], ["2025-06-27", 24.9397], ["2025-09-26", 21.745], ["2025-12-31", 22.9967], ["2026-04-03", 24.1258], ["2026-07-03", 25.2673], ["2026-08-07", 26.101719467675192]], "PG": [["2021-12-31", 28.9011], ["2022-03-31", 26.6667], ["2022-06-30", 24.7487], ["2022-09-30", 21.8804], ["2022-12-31", 26.5895], ["2023-03-31", 25.9042], ["2023-06-30", 25.7186], ["2023-09-30", 23.6786], ["2023-12-31", 24.5461], ["2024-03-31", 26.5114], ["2024-06-30", 27.3953], ["2024-09-30", 29.8621], ["2024-12-31", 26.6959], ["2025-03-31", 27.0508], ["2025-06-30", 24.4731], ["2025-09-30", 22.4307], ["2025-12-31", 21.2311], ["2026-03-31", 21.117], ["2026-06-30", 22.1511], ["2026-08-07", 22.188387669494627]], "JNJ": [["2022-01-02", 21.904], ["2022-04-03", 24.0148], ["2022-07-03", 26.131], ["2022-10-02", 22.7521], ["2023-01-01", 26.2481], ["2023-04-02", 33.1906], ["2023-07-02", 34.2692], ["2023-10-01", 11.6579], ["2023-12-31", 11.4242], ["2024-03-31", 10.4004], ["2024-06-30", 9.62846], ["2024-09-29", 26.5461], ["2024-12-31", 24.7505], ["2025-03-31", 18.3022], ["2025-06-30", 16.2241], ["2025-09-28", 17.2147], ["2025-12-31", 18.7625], ["2026-03-31", 28.259], ["2026-06-30", 29.4287], ["2026-08-07", 29.78832415464705]], "UNH": [["2021-12-31", 27.7732], ["2022-03-31", 27.913], ["2022-06-30", 26.8214], ["2022-09-30", 24.7326], ["2022-12-31", 25.0321], ["2023-03-31", 21.6091], ["2023-06-30", 21.5051], ["2023-09-30", 21.8832], ["2023-12-31", 22.065], ["2024-03-31", 30.2384], ["2024-06-30", 33.7706], ["2024-09-30", 38.0899], ["2024-12-31", 32.6151], ["2025-03-31", 21.9326], ["2025-06-30", 13.5169], ["2025-09-30", 18.0219], ["2025-12-31", 24.9516], ["2026-03-31", 20.4373], ["2026-06-30", 26.7458], ["2026-08-07", 26.006204227854184]], "0700": [["2021-06-30", 24.549], ["2021-09-30", 19.231], ["2021-12-31", 15.791], ["2022-03-31", 14.414], ["2022-06-30", 16.373], ["2022-09-30", 12.858], ["2022-12-31", 14.767], ["2023-03-31", 16.662], ["2023-06-30", 14.688], ["2023-09-30", 13.803], ["2023-12-31", 21.634], ["2024-03-31", 19.884], ["2024-06-30", 20.897], ["2024-09-30", 21.731], ["2024-12-31", 18.44], ["2025-03-31", 21.121], ["2025-06-30", 20.021], ["2025-09-30", 25.202], ["2025-12-31", 21.625], ["2026-03-31", 16.343], ["2026-08-07", 16.644509626835163]], "1810": [["2021-06-30", 18.913], ["2021-09-30", 17.206], ["2021-12-31", 19.879], ["2022-03-31", 25.683], ["2022-06-30", 71.266], ["2022-09-30", 111.867], ["2022-12-31", 97.552], ["2023-03-31", 36.417], ["2023-06-30", 25.969], ["2023-09-30", 18.1], ["2023-12-31", 20.295], ["2024-03-31", 19.696], ["2024-06-30", 20.262], ["2024-09-30", 26.175], ["2024-12-31", 34.388], ["2025-03-31", 39.114], ["2025-06-30", 38.156], ["2025-09-30", 29.14], ["2025-12-31", 21.976], ["2026-03-31", 20.393], ["2026-08-07", 17.882413236052674]], "9988": [["2021-06-30", 26.85], ["2021-09-30", 20.782], ["2021-12-31", 28.131], ["2022-03-31", 29.92], ["2022-06-30", 51.741], ["2022-09-30", 110.547], ["2022-12-31", 49.114], ["2023-03-31", 24.837], ["2023-06-30", 18.441], ["2023-09-30", 12.161], ["2023-12-31", 13.981], ["2024-03-31", 16.425], ["2024-06-30", 18.158], ["2024-09-30", 20.171], ["2024-12-31", 11.65], ["2025-03-31", 17.115], ["2025-06-30", 12.436], ["2025-09-30", 23.03], ["2025-12-31", 25.094], ["2026-03-31", 18.597], ["2026-08-07", 18.85147]], "9618": [["2021-06-30", 21.963], ["2021-09-30", 27.867], ["2022-09-30", 255.97], ["2022-12-31", 58.388], ["2023-03-31", 24.08], ["2023-06-30", 17.756], ["2023-09-30", 14.042], ["2023-12-31", 13.338], ["2024-03-31", 12.394], ["2024-06-30", 9.22], ["2024-09-30", 11.772], ["2024-12-31", 8.869], ["2025-03-31", 9.599], ["2025-06-30", 8.72], ["2025-09-30", 10.967], ["2025-12-31", 14.51], ["2026-03-31", 20.2], ["2026-08-07", 22.09167]], "9992": [["2023-09-30", 33.749], ["2023-12-31", 22.574], ["2024-03-31", 26.929], ["2024-06-30", 30.877], ["2024-09-30", 27.41], ["2024-12-31", 35.75], ["2025-03-31", 39.095], ["2025-06-30", 47.671], ["2025-09-30", 33.162], ["2025-12-31", 17.535], ["2026-08-07", 14.755098000956556]], "1211": [["2021-06-30", 176.439], ["2021-09-30", 203.2], ["2021-12-31", 239.47], ["2022-03-31", 171.286], ["2022-06-30", 164.107], ["2022-09-30", 65.592], ["2022-12-31", 39.213], ["2023-03-31", 34.286], ["2023-06-30", 30.069], ["2023-09-30", 23.558], ["2023-12-31", 19.053], ["2024-03-31", 18.768], ["2024-06-30", 21.095], ["2024-09-30", 24.704], ["2024-12-31", 19.54], ["2025-03-31", 25.16], ["2025-06-30", 24.132], ["2025-09-30", 25.146], ["2025-12-31", 26.154], ["2026-03-31", 33.437], ["2026-08-07", 26.412133551576055]]}, evebit: {"AAPL": [["2021-12-25", 25.1444], ["2022-03-26", 24.2945], ["2022-06-25", 19.8728], ["2022-09-24", 20.6815], ["2022-12-31", 18.586], ["2023-04-01", 23.5658], ["2023-07-01", 27.4626], ["2023-09-30", 23.7256], ["2023-12-30", 25.3796], ["2024-03-30", 22.5604], ["2024-06-29", 26.9136], ["2024-09-28", 28.2829], ["2024-12-28", 30.9312], ["2025-03-29", 25.949], ["2025-06-28", 23.2979], ["2025-09-27", 28.6955], ["2025-12-27", 28.6618], ["2026-03-28", 24.8736], ["2026-06-27", 26.9127], ["2026-08-07", 29.04058]], "MSFT": [["2021-12-31", 31.3001], ["2022-03-31", 27.6246], ["2022-06-30", 22.4685], ["2022-09-30", 19.9586], ["2022-12-31", 21.0897], ["2023-03-31", 24.7654], ["2023-06-30", 28.0108], ["2023-09-30", 24.3597], ["2023-12-31", 27.8723], ["2024-03-31", 29.5673], ["2024-06-30", 30.2853], ["2024-09-30", 28.1436], ["2024-12-31", 26.544], ["2025-03-31", 22.6938], ["2025-06-30", 28.5056], ["2025-09-30", 28.0202], ["2025-12-31", 24.9788], ["2026-03-31", 18.3186], ["2026-06-30", 17.7174], ["2026-08-07", 24.24488]], "GOOGL": [["2021-12-31", 22.9279], ["2022-03-31", 20.935], ["2022-06-30", 16.0854], ["2022-09-30", 14.6506], ["2022-12-31", 13.9909], ["2023-03-31", 17.0593], ["2023-06-30", 19.0456], ["2023-09-30", 19.6494], ["2023-12-31", 19.6215], ["2024-03-31", 19.3369], ["2024-06-30", 22.1436], ["2024-09-30", 18.691], ["2024-12-31", 19.9169], ["2025-03-31", 15.3746], ["2025-06-30", 17.0841], ["2025-09-30", 23.14], ["2025-12-31", 28.7974], ["2026-03-31", 24.9602], ["2026-06-30", 28.8491], ["2026-08-07", 28.81296]], "AMZN": [["2021-12-31", 69.0029], ["2022-03-31", 86.6861], ["2022-06-30", 74.8728], ["2022-09-30", 94.2073], ["2022-12-31", 75.9651], ["2023-03-31", 85.1116], ["2023-06-30", 80.1121], ["2023-09-30", 52.5387], ["2023-12-31", 44.1339], ["2024-03-31", 40.648], ["2024-06-30", 38.088], ["2024-09-30", 33.0889], ["2024-12-31", 34.3139], ["2025-03-31", 28.7053], ["2025-06-30", 31.2306], ["2025-09-30", 31.2715], ["2025-12-31", 31.3459], ["2026-03-31", 27.0016], ["2026-06-30", 28.4944], ["2026-08-07", 32.7101]], "META": [["2021-12-31", 18.9894], ["2022-03-31", 13.0675], ["2022-06-30", 10.29], ["2022-09-30", 9.84063], ["2022-12-31", 10.3794], ["2023-03-31", 19.3133], ["2023-06-30", 25.1437], ["2023-09-30", 20.3159], ["2023-12-31", 18.7872], ["2024-03-31", 22.7106], ["2024-06-30", 21.3803], ["2024-09-30", 22.8046], ["2024-12-31", 20.9704], ["2025-03-31", 19.6051], ["2025-06-30", 23.625], ["2025-09-30", 22.6874], ["2025-12-31", 20.0818], ["2026-03-31", 16.4534], ["2026-06-30", 16.7649], ["2026-08-07", 17.54152]], "KO": [["2021-12-31", 27.9472], ["2022-04-01", 27.8074], ["2022-07-01", 30.1074], ["2022-09-30", 25.7213], ["2022-12-31", 27.9167], ["2023-03-31", 27.4157], ["2023-06-30", 26.3344], ["2023-09-29", 24.143], ["2023-12-31", 25.0915], ["2024-03-29", 28.8261], ["2024-06-28", 29.144], ["2024-09-27", 35.4909], ["2024-12-31", 29.9549], ["2025-03-28", 29.5177], ["2025-06-27", 25.7977], ["2025-09-26", 21.6109], ["2025-12-31", 24.164], ["2026-04-03", 25.0517], ["2026-07-03", 26.3492], ["2026-08-07", 27.03423]], "PG": [["2021-12-31", 23.8269], ["2022-03-31", 22.1273], ["2022-06-30", 20.749], ["2022-09-30", 18.4196], ["2022-12-31", 22.2922], ["2023-03-31", 21.6594], ["2023-06-30", 21.2803], ["2023-09-30", 19.5684], ["2023-12-31", 19.9814], ["2024-03-31", 21.7385], ["2024-06-30", 22.2579], ["2024-09-30", 23.3174], ["2024-12-31", 21.0549], ["2025-03-31", 21.302], ["2025-06-30", 19.5155], ["2025-09-30", 18.7648], ["2025-12-31", 17.9654], ["2026-03-31", 17.965], ["2026-06-30", 18.5307], ["2026-08-07", 18.56922]], "JNJ": [["2022-01-02", 22.5455], ["2022-04-03", 20.267], ["2022-07-03", 20.3726], ["2022-10-02", 18.6876], ["2023-01-01", 23.6803], ["2023-04-02", 19.6228], ["2023-07-02", 20.7319], ["2023-10-01", 17.2707], ["2023-12-31", 17.686], ["2024-03-31", 17.4552], ["2024-06-30", 16.5114], ["2024-09-29", 18.6489], ["2024-12-31", 17.1214], ["2025-03-31", 19.4869], ["2025-06-30", 18.4867], ["2025-09-28", 19.4528], ["2025-12-31", 20.6214], ["2026-03-31", 24.0851], ["2026-06-30", 24.4805], ["2026-08-07", 24.77424]], "UNH": [["2021-12-31", 19.9096], ["2022-03-31", 20.0051], ["2022-06-30", 19.2836], ["2022-09-30", 17.7404], ["2022-12-31", 17.7163], ["2023-03-31", 15.2096], ["2023-06-30", 14.9317], ["2023-09-30", 15.078], ["2023-12-31", 15.3477], ["2024-03-31", 14.4506], ["2024-06-30", 14.9559], ["2024-09-30", 17.0661], ["2024-12-31", 14.6435], ["2025-03-31", 14.5405], ["2025-06-30", 9.50871], ["2025-09-30", 12.2498], ["2025-12-31", 16.171], ["2026-03-31", 13.4395], ["2026-06-30", 17.4796], ["2026-08-07", 18.98902]], "0700": [["2021-06-30", 36.105], ["2021-09-30", 28.885], ["2021-12-31", 29.874], ["2022-03-31", 27.109], ["2022-06-30", 29.505], ["2022-09-30", 23.885], ["2022-12-31", 26.278], ["2023-03-31", 26.422], ["2023-06-30", 21.867], ["2023-09-30", 18.349], ["2023-12-31", 15.731], ["2024-03-31", 15.035], ["2024-06-30", 16.752], ["2024-09-30", 18.667], ["2024-12-31", 17.496], ["2025-03-31", 19.906], ["2025-06-30", 19.211], ["2025-09-30", 24.132], ["2025-12-31", 20.095], ["2026-03-31", 15.541], ["2026-08-07", 13.91069]], "1810": [["2021-06-30", 28.575], ["2021-09-30", 19.017], ["2021-12-31", 15.689], ["2022-03-31", 13.24], ["2022-06-30", 18.77], ["2022-09-30", 20.304], ["2022-12-31", 33.23], ["2023-03-31", 38.036], ["2023-06-30", 23.938], ["2023-09-30", 17.313], ["2023-12-31", 19.166], ["2024-03-31", 15.518], ["2024-06-30", 15.882], ["2024-09-30", 22.845], ["2024-12-31", 32.553], ["2025-03-31", 39.747], ["2025-06-30", 41.172], ["2025-09-30", 33.592], ["2025-12-31", 25.692], ["2026-03-31", 24.491], ["2026-08-07", 20.2302]], "9988": [["2021-06-30", 35.999], ["2021-09-30", 22.667], ["2021-12-31", 21.226], ["2022-03-31", 17.38], ["2022-06-30", 20.865], ["2022-09-30", 13.415], ["2022-12-31", 13.682], ["2023-03-31", 15.147], ["2023-06-30", 10.588], ["2023-09-30", 10.322], ["2023-12-31", 9.071], ["2024-03-31", 7.357], ["2024-06-30", 7.683], ["2024-09-30", 12.159], ["2024-12-31", 9.101], ["2025-03-31", 13.983], ["2025-06-30", 11.834], ["2025-09-30", 23.846], ["2025-12-31", 24.976], ["2026-03-31", 31.501], ["2026-08-07", 30.79735]], "9618": [["2021-06-30", 138.003], ["2021-09-30", 187.53], ["2021-12-31", 167.92], ["2022-03-31", 107.109], ["2022-06-30", 74.604], ["2022-09-30", 34.835], ["2022-12-31", 28.61], ["2023-03-31", 17.312], ["2023-06-30", 12.432], ["2023-09-30", 8.717], ["2023-12-31", 7.576], ["2024-03-31", 8.223], ["2024-06-30", 7.293], ["2024-09-30", 9.934], ["2024-12-31", 8.356], ["2025-03-31", 7.174], ["2025-06-30", 7.601], ["2025-09-30", 14.205], ["2025-12-31", 54.745], ["2026-08-07", 42.43496]], "9992": [["2023-09-30", 25.813], ["2023-12-31", 16.06], ["2024-03-31", 19.572], ["2024-06-30", 22.876], ["2024-09-30", 19.189], ["2024-12-31", 25.154], ["2025-03-31", 28.205], ["2025-06-30", 35.231], ["2025-09-30", 24.033], ["2025-12-31", 12.454], ["2026-08-07", 10.02286]], "1211": [["2021-06-30", 69.301], ["2021-09-30", 99.305], ["2021-12-31", 115.296], ["2022-03-31", 97.417], ["2022-06-30", 117.54], ["2022-09-30", 48.5], ["2022-12-31", 30.389], ["2023-03-31", 25.557], ["2023-06-30", 23.834], ["2023-09-30", 18.021], ["2023-12-31", 15.756], ["2024-03-31", 14.708], ["2024-06-30", 17.232], ["2024-09-30", 19.337], ["2024-12-31", 15.171], ["2025-03-31", 19.523], ["2025-06-30", 19.501], ["2025-09-30", 20.827], ["2025-12-31", 23.138], ["2026-03-31", 28.346], ["2026-08-07", 25.32785]]} }
+    };
+    // ticker -> 公司主页域名，用于 Google s2 favicon 图标；缺失的 ticker 不显示 logo
+    const LOGO_DOMAIN = {"AAPL": "apple.com", "MSFT": "microsoft.com", "GOOGL": "abc.xyz", "AMZN": "amazon.com", "META": "meta.com", "KO": "coca-colacompany.com", "PG": "pg.com", "JNJ": "jnj.com", "UNH": "unitedhealthgroup.com", "0700": "tencent.com", "1810": "mi.com", "9988": "alibabagroup.com", "9618": "jd.com", "9992": "popmart.com", "1211": "byd.com", "VUG": "vanguard.com", "QQQM": "invesco.com", "SPYM": "ssga.com"};
+    // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
+    // 主源 Google s2 favicon; 失败则切换到 DuckDuckGo icon 服务; 两者都失败才隐藏
+    function logoImg(t) {
+      const d = LOGO_DOMAIN[t];
+      if (!d) return '';
+      const onerr = "if(!this.dataset.fb){this.dataset.fb=1;"
+                  + "this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}"
+                  + "else{this.style.display='none';}";
+      return `<img class="tk-logo" alt="" loading="lazy" data-domain="${d}" `
+           + `src="https://www.google.com/s2/favicons?domain=${d}&sz=64" `
+           + `onerror="${onerr}">`;
+    }
+
+    // 每个 ticker 的当前快照（close/shares/debt/cash/ebit/pe/currency）
+    // 用于在均值虚线右端反推"若估值回到均值时的隐含股价"
+    const SNAPSHOT = {"VUG": {"close": 88.68, "pe": 36.65, "ebit": null, "debt": null, "cash": null, "shares": null, "currency": "USD"}, "QQQM": {"close": 294.26, "pe": 33.95, "ebit": null, "debt": null, "cash": null, "shares": null, "currency": "USD"}, "SPYM": {"close": 90.47, "pe": 26.82, "ebit": null, "debt": null, "cash": null, "shares": null, "currency": "USD"}, "AAPL": {"close": 312.41, "pe": 35.839, "ebit": 154859000000.0, "debt": 84344000000.0, "cash": 146517000000.0, "shares": 14594179999.999998, "currency": "USD"}, "MSFT": {"close": 499.86, "pe": 27.847, "ebit": 155237000000.0, "debt": 128813000000.0, "cash": 76843000000.0, "shares": 7425545490.999479, "currency": "USD"}, "GOOGL": {"close": 357.75, "pe": 17.95, "ebit": 147628000000.0, "debt": 120791000000.0, "cash": 242474000000.0, "shares": 12230000000.0, "currency": "USD"}, "AMZN": {"close": 272.26, "pe": 21.893, "ebit": 93712000000.0, "debt": 251635000000.0, "cash": 122988000000.0, "shares": 10786313572.001028, "currency": "USD"}, "META": {"close": 589.9, "pe": 22.229, "ebit": 86927000000.0, "debt": 112318000000.0, "cash": 90260000000.0, "shares": 2547506225.000848, "currency": "USD"}, "KO": {"close": 86.85, "pe": 26.102, "ebit": 14854000000.0, "debt": 44261000000.0, "cash": 16371000000.0, "shares": 4302549243.005181, "currency": "USD"}, "PG": {"close": 146.97, "pe": 22.188, "ebit": 19748000000.0, "debt": 35025000000.0, "cash": 9942000000.0, "shares": 2324433059.998639, "currency": "USD"}, "JNJ": {"close": 256.98, "pe": 29.788, "ebit": 26139000000.0, "debt": 49036000000.0, "cash": 20758000000.0, "shares": 2409898596.9997663, "currency": "USD"}, "UNH": {"close": 403.97, "pe": 26.006, "ebit": 21676000000.0, "debt": 73328000000.0, "cash": 31468000000.0, "shares": 908144404.000297, "currency": "USD"}, "0700": {"close": 479.2, "pe": 16.645, "ebit": 285800251111.0, "debt": 460931150262.0, "cash": 522543072180.0, "shares": 8977496075.0, "currency": "HKD"}, "1810": {"close": 26.86, "pe": 17.882, "ebit": 30297518246.0, "debt": 40200786741.0, "cash": 111649626464.0, "shares": 25736553767.01415, "currency": "HKD"}, "9988": {"close": 124.4, "pe": 18.851, "ebit": 71590725374.0, "debt": 320224224532.0, "cash": 360118978341.0, "shares": 18241927273.92283, "currency": "HKD"}, "9618": {"close": 127.3, "pe": 22.092, "ebit": -3450922348.0, "debt": 122782816869.0, "cash": 229757999650.0, "shares": 2730635313.6527886, "currency": "HKD"}, "9992": {"close": 157.3, "pe": 14.755, "ebit": 18950789070.0, "debt": 3184389985.0, "cash": 19179008647.0, "shares": 1311479456.9993641, "currency": "HKD"}, "1211": {"close": 89.85, "pe": 26.412, "ebit": 36446353726.0, "debt": 164078293921.0, "cash": 147245207345.0, "shares": 9932144943.183084, "currency": "HKD"}};
+    // 根据 metric 和均值反推该 ticker 的隐含股价；失败(数据缺失)返回 null
+    function implyPrice(ticker, metric, avg) {
+      const s = SNAPSHOT[ticker];
+      if (!s || !isFinite(avg)) return null;
+      if (metric === 'pe') {
+        // implied = avg * EPS_TTM = avg / snap_pe * close
+        if (!s.close || !s.pe) return null;
+        return avg / s.pe * s.close;
+      }
+      if (metric === 'evebit') {
+        // implied = (avg * EBIT_TTM - debt + cash) / shares
+        if (!s.ebit || !s.shares) return null;
+        const targetEv  = avg * s.ebit;
+        const targetMc  = targetEv - (s.debt || 0) + (s.cash || 0);
+        return targetMc / s.shares;
+      }
+      return null;
+    }
+    // 价格格式化：统一用 $ 前缀（USD / HKD 均使用同一符号）
+    function fmtPrice(ticker, price) {
+      if (price == null || !isFinite(price)) return '';
+      const abs = Math.abs(price);
+      const digits = abs >= 100 ? 1 : 2;   // >=100 只留 1 位小数，避免过长
+      return '$' + price.toFixed(digits);
+    }
+    const METRIC_META = {
+      pe:     { title: 'P/E (TTM) History',       label: 'P/E (TTM)' },
+      evebit: { title: 'EV / EBIT (TTM) History', label: 'EV/EBIT (TTM)' }
+    };
+    const RANGE_META = {
+        '1y': { label: 'Last 1Y', freq: 'weekly (computed locally)',     computed: true  },
+        '3y': { label: 'Last 3Y', freq: 'quarterly (fiscal period end)', computed: false },
+        '5y': { label: 'Last 5Y', freq: 'quarterly (fiscal period end)', computed: false }
+    };
+    // 1Y 本地反算公式（仅 UI 提示使用）
+    const FORMULA_HTML = {
+      pe:     "P/E<sub>week</sub> = weekly close &divide; EPS<sub>TTM</sub>(q<sub>t</sub>) &nbsp;&middot;&nbsp; EPS<sub>TTM</sub>(q<sub>t</sub>) = sum of last 4 quarterly diluted EPS filed on or before that week",
+      evebit: "EV<sub>week</sub> = weekly close &times; shares + debt &minus; cash &nbsp;&middot;&nbsp; EV/EBIT<sub>week</sub> = EV<sub>week</sub> &divide; EBIT<sub>TTM</sub>(q<sub>t</sub>) &nbsp;&middot;&nbsp; EBIT<sub>TTM</sub>(q<sub>t</sub>) = sum of last 4 quarterly Operating Income; shares / debt / cash use today's snapshot"
+    };
+
+    (function() {
+      const PALETTE = [
+        '#6ea8ff', '#22c55e', '#f59e0b', '#ef4444',
+        '#a78bfa', '#f472b6', '#14b8a6', '#eab308'
+      ];
+      const panel     = document.getElementById('chartPanel');
+      const body      = document.getElementById('chartBody');
+      const legendE   = document.getElementById('chartLegend');
+      const selectedE = document.getElementById('chartSelected');
+      const closeBtn  = document.getElementById('chartClose');
+      const titleE    = document.getElementById('chartTitle');
+      const subE      = document.getElementById('chartSub');
+      const formulaE  = document.getElementById('chartFormula');
+      const tabs      = document.querySelectorAll('.chart-tab');
+      const rangeBtns = document.querySelectorAll('.range-btn');
+
+      const selected = new Map();   // ticker -> color
+      let currentMetric = 'pe';     // 'pe' | 'evebit'
+      let currentRange  = '5y';     // '1y' | '3y' | '5y'
+
+      function pickColor() {
+        const used = new Set(selected.values());
+        for (const c of PALETTE) if (!used.has(c)) return c;
+        return PALETTE[selected.size % PALETTE.length];
+      }
+
+      function fmt(v) {
+        if (v == null || isNaN(v)) return 'N/A';
+        return Number(v).toFixed(2);
+      }
+
+      function render() {
+        const bucket  = HISTORY_DATA[currentRange] || {};
+        const dataMap = bucket[currentMetric] || {};
+        const meta    = METRIC_META[currentMetric];
+        const rmeta   = RANGE_META[currentRange];
+        titleE.textContent = meta.title;
+        subE.textContent = `${rmeta.label} · ${rmeta.freq} · source stockanalysis.com`;
+
+        // 1Y 本地反算时展示公式说明
+        if (rmeta.computed) {
+          formulaE.classList.add('show');
+          formulaE.innerHTML =
+            `<span class="cf-tag">COMPUTED</span>` +
+            `<b>1Y 周频为本地反算</b>，非站点直接提供。` +
+            `采用史周收盘价 + 今日 statistics 快照（EPS<sub>TTM</sub>、EBIT<sub>TTM</sub>、股本、总债务、现金）。` +
+            `历史基本面实际随时间变化，因此早期点会存在偏差，仅供参考。<br/>` +
+            `<code>${FORMULA_HTML[currentMetric]}</code>`;
+        } else {
+          formulaE.classList.remove('show');
+          formulaE.innerHTML = '';
+        }
+
+        // 更新徽章选中态
+        document.querySelectorAll('.tk-badge').forEach(b => {
+          const t = b.dataset.ticker;
+          b.classList.toggle('selected', selected.has(t));
+          if (selected.has(t)) b.style.setProperty('--sel', selected.get(t));
+          else b.style.removeProperty('--sel');
+        });
+
+        if (selected.size === 0) {
+          panel.classList.remove('open');
+          panel.setAttribute('aria-hidden', 'true');
+          body.innerHTML = '<div class="chart-empty">Click a ticker on the left to plot its history.<br/>Click again to remove; multiple tickers overlay for comparison.</div>';
+          legendE.innerHTML = '';
+          selectedE.innerHTML = '';
+          return;
+        }
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+
+        // 汇总 x 轴（所有 ticker 里最长的日期序列）与 y 极值
+        let xAll = [];
+        let yMin =  Infinity, yMax = -Infinity;
+        const series = [];
+        for (const [t, color] of selected.entries()) {
+          const hist = dataMap[t] || [];
+          if (!hist.length) continue;
+          if (hist.length > xAll.length) xAll = hist.map(p => p[0]);
+          for (const [_, v] of hist) {
+            if (v < yMin) yMin = v;
+            if (v > yMax) yMax = v;
+          }
+          series.push({ ticker: t, color, points: hist });
+        }
+        if (!series.length) {
+          body.innerHTML = `<div class="chart-empty">No ${meta.label} history available for the selected tickers.</div>`;
+          legendE.innerHTML = '';
+          selectedE.innerHTML = '';
+          return;
+        }
+
+        // 上下留 8% padding
+        const pad = (yMax - yMin) * 0.08 || 1;
+        yMin -= pad; yMax += pad;
+        if (yMin < 0) yMin = 0;
+
+        const W = body.clientWidth  || 640;
+        const H = 360;
+        const M = { l: 46, r: 60, t: 14, b: 32 };
+        const iw = W - M.l - M.r;
+        const ih = H - M.t - M.b;
+
+        const N = xAll.length;
+        const xOf = (i) => M.l + (N === 1 ? iw/2 : iw * i / (N - 1));
+        const yOf = (v) => M.t + ih - (v - yMin) / (yMax - yMin) * ih;
+
+        // Y 轴刻度
+        const ticks = 5;
+        let yTicksSvg = '';
+        for (let k = 0; k <= ticks; k++) {
+          const v = yMin + (yMax - yMin) * k / ticks;
+          const y = yOf(v);
+          yTicksSvg += `<line x1="${M.l}" x2="${W - M.r}" y1="${y}" y2="${y}" class="grid"/>`;
+          yTicksSvg += `<text x="${M.l - 8}" y="${y}" class="axis-lbl" text-anchor="end" dominant-baseline="middle">${v.toFixed(1)}</text>`;
+        }
+
+        // X 轴刻度：最多显示 6 个；1Y 周频用 MM-DD，3Y/5Y 用 YYYY-MM（点为报告期末）
+        // 无论抽稀 step 是否命中，最右点（最新时间）都必须显示：
+        //   * 与前一 tick 距离足够远 → 追加
+        //   * 距离太近 → 替换掉上一个 tick，避免文字重叠
+        const step = Math.max(1, Math.ceil(N / 6));
+        const isWeekly = currentRange === '1y';
+        const tickIdx = [];
+        for (let i = 0; i < N; i += step) tickIdx.push(i);
+        if (N > 0 && tickIdx[tickIdx.length - 1] !== N - 1) {
+          const minGap = Math.max(1, Math.floor(step / 2));
+          if ((N - 1) - tickIdx[tickIdx.length - 1] >= minGap) {
+            tickIdx.push(N - 1);
+          } else {
+            tickIdx[tickIdx.length - 1] = N - 1;
+          }
+        }
+        let xTicksSvg = '';
+        for (const i of tickIdx) {
+          const raw = xAll[i] || '';
+          const lbl = isWeekly
+            ? raw.slice(5)                       // '2026-08-03' -> '08-03'
+            : raw.slice(0, 7);                   // '2024-12-31' -> '2024-12'
+          const x = xOf(i);
+          xTicksSvg += `<text x="${x}" y="${H - M.b + 16}" class="axis-lbl" text-anchor="middle">${lbl}</text>`;
+        }
+
+        // 每条折线
+        let seriesSvg = '';
+        let avgSvg    = ''; // 均值虚线单独一层，画在折线之上、点标签之下
+        let labelsSvg = ''; // 数据点值标签单独一层，最后再画，保证不被折线/圆点盖住
+        // 根据 series 中最长点数决定标签的抽稀步长（点太密时避免文字挤在一起）
+        const maxPts = series.reduce((m, s) => Math.max(m, s.points.length), 0);
+        const lblStep = maxPts <= 20 ? 1 : (maxPts <= 30 ? 2 : Math.ceil(maxPts / 18));
+        for (let si = 0; si < series.length; si++) {
+          const s = series[si];
+          // 让 series.points 与 xAll 右对齐（因为长度可能不同）
+          const offset = N - s.points.length;
+          const d = s.points.map((p, i) => {
+            const x = xOf(offset + i);
+            const y = yOf(p[1]);
+            return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+          }).join(' ');
+          seriesSvg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+          // 端点 + 每点值标签
+          const lastIdx = s.points.length - 1;
+          // 多条线时给不同曲线一点垂直错位，减少标签重叠
+          const yShift = (series.length > 1) ? (si % 2 === 0 ? -9 : 12) : -9;
+          for (let i = 0; i < s.points.length; i++) {
+            const x = xOf(offset + i);
+            const y = yOf(s.points[i][1]);
+            seriesSvg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="${s.color}"/>`;
+            // 抽稀：始终标注最后一个点，其余按步长采样
+            const show = (i === lastIdx) || (((lastIdx - i) % lblStep) === 0);
+            if (show && i !== lastIdx) {
+              const v = s.points[i][1];
+              const txt = (Math.abs(v) >= 100) ? v.toFixed(0) : v.toFixed(1);
+              labelsSvg += `<text x="${x.toFixed(1)}" y="${(y + yShift).toFixed(1)}" class="pt-lbl" fill="${s.color}" text-anchor="middle">${txt}</text>`;
+            }
+          }
+          // 最新值标注（右侧粗体大号）
+          const last = s.points[lastIdx];
+          const lx = xOf(N - 1);
+          const ly = yOf(last[1]);
+          seriesSvg += `<text x="${(lx + 6).toFixed(1)}" y="${ly.toFixed(1)}" class="last-val" fill="${s.color}" dominant-baseline="middle">${last[1].toFixed(1)}</text>`;
+
+          // 均值虚线（横跨该 series 所覆盖的 x 区间）
+          const sVals = s.points.map(p => p[1]);
+          const sAvg  = sVals.reduce((a,b) => a + b, 0) / sVals.length;
+          const ax1 = xOf(offset);
+          const ax2 = xOf(N - 1);
+          const ay  = yOf(sAvg);
+          avgSvg += `<line x1="${ax1.toFixed(1)}" x2="${ax2.toFixed(1)}" y1="${ay.toFixed(1)}" y2="${ay.toFixed(1)}" class="avg-line" stroke="${s.color}"/>`;
+          const avgTxt = (Math.abs(sAvg) >= 100) ? sAvg.toFixed(0) : sAvg.toFixed(1);
+          avgSvg += `<text x="${(ax1 + 4).toFixed(1)}" y="${(ay - 3).toFixed(1)}" class="avg-lbl" fill="${s.color}" text-anchor="start">avg ${avgTxt}</text>`;
+
+          // 均值虚线右端：按当前 metric + 该 series 的均值反推"如估值回到均值,当前股价应该是多少"
+          //   P/E     : implied = sAvg * EPS_TTM      (EPS_TTM = close / snap_pe)
+          //   EV/EBIT : implied = (sAvg * EBIT - debt + cash) / shares
+          // 位置紧贴虚线右端(ax2 右侧), 与最新值粗体大字错开一行(向下偏移 12px)
+          const impPrice = implyPrice(s.ticker, currentMetric, sAvg);
+          const impTxt   = fmtPrice(s.ticker, impPrice);
+          if (impTxt) {
+            // 第一行: 按均值反推的隐含股价
+            avgSvg += `<text x="${(ax2 + 6).toFixed(1)}" y="${(ay + 6).toFixed(1)}" class="avg-imp" fill="${s.color}" dominant-baseline="middle">→ ${impTxt}</text>`;
+            // 第二行: 当前实际收盘价 (来自 SNAPSHOT); 视觉更弱以示区分
+            const snap = SNAPSHOT[s.ticker];
+            const curTxt = (snap && snap.close != null) ? fmtPrice(s.ticker, snap.close) : '';
+            if (curTxt) {
+              avgSvg += `<text x="${(ax2 + 6).toFixed(1)}" y="${(ay + 18).toFixed(1)}" class="avg-cur" fill="${s.color}" dominant-baseline="middle">${curTxt}</text>`;
+            }
+          }
+        }
+
+        body.innerHTML = `
+          <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
+            ${yTicksSvg}
+            ${xTicksSvg}
+            <line x1="${M.l}" x2="${M.l}" y1="${M.t}" y2="${H - M.b}" class="axis"/>
+            <line x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}" class="axis"/>
+            ${seriesSvg}
+            ${labelsSvg}
+            ${avgSvg}
+          </svg>
+        `;
+
+        // 图例（含最新/最小/最大/均值）
+        legendE.innerHTML = series.map(s => {
+          const vals = s.points.map(p => p[1]);
+          const mn = Math.min(...vals), mx = Math.max(...vals);
+          const avg = vals.reduce((a,b)=>a+b,0) / vals.length;
+          const last = vals[vals.length-1];
+          return `
+            <div class="lg-item">
+              <span class="lg-swatch" style="background:${s.color}"></span>
+              <span class="lg-tk">${logoImg(s.ticker)}<span class="tk-sym">${s.ticker}</span></span>
+              <span class="lg-stat"><em>latest</em> ${fmt(last)}</span>
+              <span class="lg-stat"><em>avg</em> ${fmt(avg)}</span>
+              <span class="lg-stat"><em>min</em> ${fmt(mn)}</span>
+              <span class="lg-stat"><em>max</em> ${fmt(mx)}</span>
+            </div>`;
+        }).join('');
+
+        selectedE.innerHTML = Array.from(selected.entries()).map(([t,c]) =>
+          `<span class="sel-chip" style="border-color:${c};color:${c}">${logoImg(t)}<span class="tk-sym">${t}</span></span>`
+        ).join('');
+      }
+
+      function toggle(ticker) {
+        if (selected.has(ticker)) {
+          selected.delete(ticker);
+        } else {
+          // 即便当前 metric 无数据也允许选中，render 里会给出 "No data" 提示
+          selected.set(ticker, pickColor());
+        }
+        render();
+      }
+
+      document.querySelectorAll('.tk-badge').forEach(b => {
+        b.addEventListener('click', () => toggle(b.dataset.ticker));
+      });
+      tabs.forEach(t => {
+        t.addEventListener('click', () => {
+          const m = t.dataset.metric;
+          if (m === currentMetric) return;
+          currentMetric = m;
+          tabs.forEach(x => {
+            const on = x.dataset.metric === m;
+            x.classList.toggle('active', on);
+            x.setAttribute('aria-selected', on ? 'true' : 'false');
+          });
+          render();
+        });
+      });
+      rangeBtns.forEach(b => {
+        b.addEventListener('click', () => {
+          const r = b.dataset.range;
+          if (r === currentRange) return;
+          currentRange = r;
+          rangeBtns.forEach(x => {
+            const on = x.dataset.range === r;
+            x.classList.toggle('active', on);
+            x.setAttribute('aria-selected', on ? 'true' : 'false');
+          });
+          render();
+        });
+      });
+      closeBtn.addEventListener('click', () => {
+        selected.clear();
+        render();
+      });
+      window.addEventListener('resize', () => { if (selected.size) render(); });
+    })();
+  </script>
+</body>
+</html>
