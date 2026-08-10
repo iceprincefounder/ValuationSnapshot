@@ -23,6 +23,34 @@
     这些曲线严格上是"指数 P/E"而非"ETF 组合 P/E", 前端会在图表副标题里明确标注每个 ticker 的数据源。
 
 依赖：仅标准库（urllib + re），无需第三方包。
+
+------------------------------------------------------------------------------
+外部凭证 / API Keys （维护须知）
+------------------------------------------------------------------------------
+本脚本会从环境变量读取以下第三方 API 凭证。**任何 key 都不允许硬编码进源码或
+提交进仓库**——本仓库带 GitHub Pages 是公开的, key 一旦入库几分钟内会被自动扫描
+盗刷。
+
+    FMP_API_KEY   -- Financial Modeling Prep (financialmodelingprep.com)
+                     用途: 抓取 DCF 公允价值 / WACC / 增长率等估值模型输出。
+                     免费额度: 250 次/天, 仅支持个股, ETF 不支持 (返回 N/A)。
+                     缺失时脚本不报错, 相关字段留空。
+
+存放位置约定:
+    - 本地开发: 用户环境变量 (PowerShell:
+        [Environment]::SetEnvironmentVariable("FMP_API_KEY","xxx","User")
+      )
+    - GitHub Actions (周度快照 workflow): 已在仓库
+        Settings -> Secrets and variables -> Actions
+      里配置为 repository secret, workflow YAML 通过
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      注入到脚本进程。
+    - 若 key 疑似泄漏, 立即到 FMP 后台 rotate 一次, 并同步更新 GitHub secret。
+
+新增其它第三方数据源时, 请沿用同一套 "环境变量 + GitHub secret" 模式, 并在
+本注释块中登记, 保持 key 治理的单一入口。
+------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -183,6 +211,25 @@ class Row:
     # 该 ticker 的 Forward P/E 数据源署名（仅 ETF 使用, 显示在表格 P/E (Fwd) 单元格 tooltip 里；
     # 个股由 stockanalysis statistics 页直接给出, 不额外标注, 保持 None）
     pe_forward_source: str | None = None
+    # DCF 估值信息（来自 FMP `advanced_discounted_cash_flow` endpoint, 仅个股 & 快照生成时抓一次）。
+    # 存整体 dict, 结构见 `_fetch_fmp_dcf()` 的返回值; 前端在 DCF Tab 里渲染:
+    #   {
+    #     "fv_1y":  float | None,   # 本地基于 FMP 逐年 FCF 反算的 1Y 预测期 FV/share
+    #     "fv_3y":  float | None,   # 同上, 3Y
+    #     "fv_5y":  float | None,   # 同上, 5Y (对齐 FMP 原生 equityValuePerShare)
+    #     "wacc":   float | None,   # 加权平均资本成本 (%)
+    #     "g":      float | None,   # 永续增长率 (%)
+    #     "shares": float | None,   # 稀释股本 (股)
+    #     "net_debt": float | None, # 净债务 = 有息负债 - 现金 (报表币种)
+    #     "years":  [                # 显式预测期逐年现金流（旧->新, 最多 5-10 年）
+    #       {"year": int, "fcf": float, "pv": float}, ...
+    #     ],
+    #     "currency": str | None,   # 报表币种 (USD/HKD 等; FMP 港股用 HKD)
+    #     "asof":   str | None,     # FMP 提供的日期 (通常 = 最新报表日)
+    #     "source_url": str | None, # endpoint URL, 前端 tooltip 展示
+    #   }
+    # ETF 无 DCF 支持, 保持 None. 抓取失败 (无 key / 网络错 / ticker 不支持) 亦为 None.
+    dcf: dict | None = None
 
 
 # ---------- URL 构造 ----------
@@ -891,6 +938,173 @@ def _build_1y_history(
             ev_series.append((date_str, ev / ebit_ttm))
 
     return pe_series, ev_series
+
+
+# ---------- FMP DCF 抓取 ----------
+# 数据源: financialmodelingprep.com `advanced_discounted_cash_flow` (免费额度 250 次/天)
+# 该 endpoint 返回未来 5-10 年逐年 FCF / WACC / g / 股本 / 净债务 快照, 我们在本地按
+# 用户选中的"预测期长度" (1Y / 3Y / 5Y) 分别折现:
+#
+#   FV_share = ( Σ(t=1..N) FCF_t / (1+WACC)^t  +  TV / (1+WACC)^N  -  NetDebt ) / Shares
+#   TV = FCF_{N+1} / (WACC - g)                  # Gordon Growth Model
+#   FCF_{N+1} = FCF_N * (1 + g)
+#
+# 相同一次 API 调用可拆出 1Y / 3Y / 5Y 三个版本, 无需重复请求。
+#
+# API key 通过环境变量 FMP_API_KEY 读取; 未设置时静默降级为 None (Row.dcf 保持 None),
+# 前端 DCF Tab 会显示 "缺失原因" 而不是曲线。
+def _fetch_fmp_dcf(ticker: str, market: str) -> dict | None:
+    """向 FMP 请求逐年 DCF 明细, 本地重算 1Y / 3Y / 5Y 三种预测期长度的 FV/share。
+
+    Returns
+    -------
+    dict | None
+        None 表示无数据 (缺 key / 网络失败 / ticker 不支持 / 数据字段缺失).
+        dict 字段见 Row.dcf 注释。
+    """
+    import os
+    api_key = os.environ.get("FMP_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    # FMP 符号规则:
+    #   US 个股: 直接用 ticker (AAPL / MSFT / GOOGL)
+    #   HK 个股: FMP 用 "0700.HK" 这种带前导 0 的 4 位代码, 与 stockanalysis 一致, 直接透传
+    #   ETF:    FMP DCF endpoint 不支持 ETF (会返回 [] 或 error), 直接跳过
+    if market == "ETF":
+        return None
+    symbol = ticker.upper()
+
+    url = (
+        f"https://financialmodelingprep.com/api/v3/advanced_discounted_cash_flow"
+        f"?symbol={symbol}&apikey={api_key}"
+    )
+    # 打印时把 key 脱敏, 避免 CI 日志泄漏
+    safe_url = url.replace(api_key, "***")
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = resp.read()
+    except Exception as e:
+        print(f"  !! FMP DCF {symbol}: request failed ({e}) — {safe_url}", file=sys.stderr)
+        return None
+    try:
+        rows = json.loads(body.decode("utf-8", errors="replace"))
+    except Exception as e:
+        print(f"  !! FMP DCF {symbol}: parse failed ({e})", file=sys.stderr)
+        return None
+    if not isinstance(rows, list) or not rows:
+        # 空数组 = ticker 不受支持; error dict = 额度耗尽 / 无效 key
+        if isinstance(rows, dict) and "Error Message" in rows:
+            print(f"  !! FMP DCF {symbol}: {rows.get('Error Message')}", file=sys.stderr)
+        else:
+            print(f"  .. FMP DCF {symbol}: no data (unsupported symbol?)", file=sys.stderr)
+        return None
+
+    # FMP 逐年数组按 year 升序 (2027, 2028, ..., 2031)。字段名以 v3 契约为准; 若个别字段缺失,
+    # 用兜底键名尝试, 全部失败则返回 None (前端显示"数据不完整")。
+    def _f(d: dict, *keys) -> float | None:
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, (int, float)) and not (v != v):  # 排除 NaN
+                return float(v)
+        return None
+
+    years_raw: list[dict] = []
+    for entry in rows:
+        if not isinstance(entry, dict):
+            continue
+        y = entry.get("year")
+        try:
+            y_int = int(y)
+        except (TypeError, ValueError):
+            continue
+        fcf = _f(entry, "freeCashFlow", "ufcf", "fcf")
+        if fcf is None:
+            continue
+        years_raw.append({
+            "year": y_int,
+            "fcf":  fcf,
+            "wacc": _f(entry, "wacc", "WACC"),
+            "g":    _f(entry, "longTermGrowthRate", "terminalGrowthRate", "growth"),
+            "shares":   _f(entry, "dilutedSharesOutstanding", "sharesOutstanding", "shares"),
+            "net_debt": _f(entry, "netDebt"),
+        })
+    if not years_raw:
+        print(f"  !! FMP DCF {symbol}: no usable yearly FCF rows", file=sys.stderr)
+        return None
+    years_raw.sort(key=lambda x: x["year"])
+
+    # WACC / g / shares / net_debt 取"任一年份的第一个非空值"——FMP 通常各年同值。
+    def _pick(field: str) -> float | None:
+        for e in years_raw:
+            v = e.get(field)
+            if v is not None:
+                return v
+        return None
+    wacc_pct   = _pick("wacc")     # FMP 单位 = 百分数 (8.32 表示 8.32%)
+    g_pct      = _pick("g")        # 同上
+    shares_out = _pick("shares")
+    net_debt   = _pick("net_debt") or 0.0
+
+    if wacc_pct is None or g_pct is None or shares_out in (None, 0):
+        print(f"  !! FMP DCF {symbol}: missing wacc / g / shares", file=sys.stderr)
+        return None
+
+    wacc = wacc_pct / 100.0
+    g    = g_pct    / 100.0
+    if wacc <= g:
+        # Gordon 公式要求 WACC > g, 否则终值发散
+        print(f"  !! FMP DCF {symbol}: wacc<=g ({wacc_pct}% <= {g_pct}%), skip", file=sys.stderr)
+        return None
+
+    # 逐年 PV 与累计企业价值; 按不同预测期长度分别算 FV/share
+    #   FV_share(N) = ( Σ(t=1..N) FCF_t / (1+WACC)^t + TV(N) / (1+WACC)^N - net_debt ) / shares
+    #   TV(N) = FCF_{N} * (1+g) / (WACC - g)         # 用最后一年预测反推终值
+    per_year: list[dict] = []
+    cum_pv = 0.0
+    fv_map: dict[int, float] = {}
+    for i, e in enumerate(years_raw, start=1):
+        disc = (1.0 + wacc) ** i
+        pv = e["fcf"] / disc
+        cum_pv += pv
+        per_year.append({"year": e["year"], "fcf": e["fcf"], "pv": pv})
+        # 用当前年份作为"预测期最后一年" 反算 FV_share
+        tv = e["fcf"] * (1.0 + g) / (wacc - g)
+        tv_pv = tv / disc
+        equity = cum_pv + tv_pv - net_debt
+        fv_map[i] = equity / shares_out
+
+    # 从 1Y / 3Y / 5Y 三档取值; 若数组不够长 (FMP 有时只返 5 年, 3Y/1Y 一定够),
+    # 缺档写 None。
+    def _cap(n: int) -> float | None:
+        if n in fv_map:
+            v = fv_map[n]
+            if v is None or v != v or v < 0:
+                return None
+            return v
+        return None
+
+    asof = rows[0].get("date") if isinstance(rows[0], dict) else None
+    print(f"  ok FMP DCF {symbol}: FV(5Y)=${_cap(5) or float('nan'):.2f} "
+          f"WACC={wacc_pct:.2f}% g={g_pct:.2f}% shares={shares_out:.0f}", file=sys.stderr)
+
+    return {
+        "fv_1y": _cap(1),
+        "fv_3y": _cap(3),
+        "fv_5y": _cap(5),
+        "wacc": wacc_pct,
+        "g":    g_pct,
+        "shares":   shares_out,
+        "net_debt": net_debt,
+        "years": per_year,
+        "currency": rows[0].get("currency") if isinstance(rows[0], dict) else None,
+        "asof": asof,
+        "source_url": "https://site.financialmodelingprep.com/developer/docs#advanced-dcf",
+    }
 
 
 def _fetch_etf(ticker: str) -> Row:
@@ -1615,6 +1829,8 @@ _HTML_TEMPLATE = """<!doctype html>
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent) inset;
   }}
+  /* 选中 ETF 时, EV/EBIT 与 DCF Tab 对组合层面无意义, 用 hidden 类彻底隐藏 */
+  .chart-tab.hidden {{ display: none; }}
 
   /* Range 切换 (1Y / 3Y / 5Y)：与 metric tab 同行，靠右站 */
   .chart-toolbar {{
@@ -1666,6 +1882,70 @@ _HTML_TEMPLATE = """<!doctype html>
     padding: 1px 4px; border-radius: 4px;
     background: color-mix(in srgb, var(--panel-2) 70%, transparent);
   }}
+
+  /* ---------- DCF Tab 卡片样式 ---------- */
+  /* 每个 ticker 一张卡, 多选并排; 卡片内详列 FV / 假设 / 逐年 FCF 折现表。*/
+  .dcf-grid {{
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    padding: 4px 18px 8px;
+  }}
+  .dcf-card {{
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 12.5px;
+  }}
+  .dcf-card.dcf-empty {{ opacity: .75; }}
+  .dcf-card-head {{
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 12px; margin-bottom: 10px;
+    border-bottom: 1px dashed var(--border);
+    padding-bottom: 8px;
+  }}
+  .dcf-title b {{ font-size: 14px; color: var(--text); }}
+  .dcf-sub {{ color: var(--muted); font-family: var(--mono); font-size: 10.5px; margin-left: 6px; }}
+  .dcf-fv {{ text-align: right; font-family: var(--mono); }}
+  .dcf-fv-main {{ color: var(--muted); font-size: 11px; }}
+  .dcf-fv-main b {{ color: var(--accent); font-size: 15px; margin-left: 4px; }}
+  .dcf-fv-sub  {{ color: var(--muted); font-size: 10.5px; margin-top: 3px; }}
+  .dcf-upside.pos {{ color: var(--good); font-weight: 700; }}
+  .dcf-upside.neg {{ color: var(--bad);  font-weight: 700; }}
+  .dcf-empty-msg {{ color: var(--muted); font-size: 11.5px; line-height: 1.55; }}
+  .dcf-empty-msg code {{
+    font-family: var(--mono); font-size: 10.5px;
+    padding: 1px 4px; border-radius: 3px;
+    background: color-mix(in srgb, var(--mid) 15%, transparent);
+    color: var(--text);
+  }}
+  .dcf-assump {{
+    display: flex; flex-wrap: wrap; gap: 6px 14px;
+    margin-bottom: 10px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }}
+  .dcf-assump b {{ color: var(--text); margin-right: 3px; }}
+  .dcf-table {{
+    width: 100%; border-collapse: collapse;
+    font-family: var(--mono); font-size: 11px;
+  }}
+  .dcf-table th {{
+    text-align: left; padding: 4px 6px;
+    color: var(--muted); font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }}
+  .dcf-table td {{
+    padding: 3px 6px; color: var(--text);
+    border-bottom: 1px dotted color-mix(in srgb, var(--border) 60%, transparent);
+  }}
+  .dcf-table td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  .dcf-table tr.dcf-tv-row td {{
+    color: var(--accent); font-weight: 600;
+    border-top: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-bottom: none;
+    padding-top: 5px;
+  }}
+  .dcf-table sup {{ font-size: 9px; }}
 
   @media (max-width: 900px) {{
     .chart-panel {{
@@ -1754,6 +2034,7 @@ _HTML_TEMPLATE = """<!doctype html>
       <div class="chart-tabs" role="tablist">
         <button type="button" class="chart-tab active" data-metric="pe"     role="tab" aria-selected="true">P/E (TTM)</button>
         <button type="button" class="chart-tab"        data-metric="evebit" role="tab" aria-selected="false">EV / EBIT (TTM)</button>
+        <button type="button" class="chart-tab"        data-metric="dcf"    role="tab" aria-selected="false">DCF</button>
       </div>
       <div class="range-group" role="tablist" aria-label="time range">
         <button type="button" class="range-btn"        data-range="1y" role="tab" aria-selected="false">1Y</button>
@@ -1783,6 +2064,10 @@ _HTML_TEMPLATE = """<!doctype html>
     //   "S&P 500 Index P/E (TTM) · multpl.com"）。未收录的 ticker 表示无历史序列。
     //   render() 会按当前选中的 ticker 集合动态拼接到图表副标题，做到"每条曲线都有出处"。
     const PE_SOURCE = {pe_source_json};
+    // ETF ticker 集合（用于动态隐藏对 ETF 无意义的 Tab：EV/EBIT、DCF）。
+    // ETF 只保留 "P/E (TTM)" Tab，因为组合层面没有 EBIT / Debt / Cash 概念，
+    // 也没有可对齐的 DCF 模型；只有指数代理的 P/E 时序有公开数据源。
+    const ETF_SET = new Set({etf_set_json});
     // ticker -> Forward P/E (P/E Fwd 列) 的数据源标签（仅 ETF 有值, 例 SSGA/Invesco）。
     // 页面加载后会给对应 ticker 行的 "P/E (Fwd)" 单元格追加 title tooltip, 悬停可见出处。
     const FWD_SOURCE = {fwd_source_json};
@@ -1803,6 +2088,10 @@ _HTML_TEMPLATE = """<!doctype html>
     // 每个 ticker 的当前快照（close/shares/debt/cash/ebit/pe/currency）
     // 用于在均值虚线右端反推"若估值回到均值时的隐含股价"
     const SNAPSHOT = {snapshot_json};
+    // 每个 ticker 的 DCF 明细 (来源: FMP advanced_discounted_cash_flow, 生成快照时抓取)。
+    // 结构见 Python 端 Row.dcf 注释。缺失 ticker (ETF / 无 key / 抓取失败) 在 DCF Tab
+    // 会显示对应缺失原因, 不阻塞其他 Tab。
+    const DCF_DATA = {dcf_json};
     // 根据 metric 和均值反推该 ticker 的隐含股价；失败(数据缺失)返回 null
     function implyPrice(ticker, metric, avg) {{
       const s = SNAPSHOT[ticker];
@@ -1830,7 +2119,8 @@ _HTML_TEMPLATE = """<!doctype html>
     }}
     const METRIC_META = {{
       pe:     {{ title: 'P/E (TTM) History',       label: 'P/E (TTM)' }},
-      evebit: {{ title: 'EV / EBIT (TTM) History', label: 'EV/EBIT (TTM)' }}
+      evebit: {{ title: 'EV / EBIT (TTM) History', label: 'EV/EBIT (TTM)' }},
+      dcf:    {{ title: 'DCF Valuation',            label: 'DCF' }}
     }};
     const RANGE_META = {{
         '1y': {{ label: 'Last 1Y', freq: 'weekly (computed locally)',     computed: true  }},
@@ -1874,12 +2164,218 @@ _HTML_TEMPLATE = """<!doctype html>
         return Number(v).toFixed(2);
       }}
 
+      // ---------------- DCF Tab 专用渲染 ----------------
+      //   数据源: FMP `advanced_discounted_cash_flow` (生成快照时抓取, 结果注入 DCF_DATA)。
+      //   公式 (Gordon Growth, 两段式 DCF):
+      //     FV_share(N) = ( Σ(t=1..N) FCF_t / (1+WACC)^t
+      //                     + FCF_N * (1+g) / (WACC-g) / (1+WACC)^N
+      //                     - NetDebt ) / Shares
+      //     其中 N ∈ {{1,3,5}} 由当前 range 决定 (currentRange 复用 1y/3y/5y 按钮)。
+      //   透明化展示: 卡片内详列 FV/Price/Upside%、WACC、g、NetDebt、Shares、逐年 FCF & PV,
+      //   底部标注数据源 & 时间范围 & 免责声明。
+      function fmtMoney(v, digits) {{
+        if (v == null || !isFinite(v)) return 'N/A';
+        const d = (digits == null) ? (Math.abs(v) >= 100 ? 1 : 2) : digits;
+        return '$' + Number(v).toFixed(d);
+      }}
+      function fmtBig(v) {{
+        // 大数字用 T/B/M 后缀, 与表格中的 EBIT / Debt / Cash 列风格一致
+        if (v == null || !isFinite(v)) return 'N/A';
+        const a = Math.abs(v);
+        if (a >= 1e12) return (v/1e12).toFixed(2) + 'T';
+        if (a >= 1e9)  return (v/1e9).toFixed(2)  + 'B';
+        if (a >= 1e6)  return (v/1e6).toFixed(2)  + 'M';
+        return v.toFixed(2);
+      }}
+      function fmtPct(v, digits) {{
+        if (v == null || !isFinite(v)) return 'N/A';
+        return Number(v).toFixed(digits == null ? 2 : digits) + '%';
+      }}
+      // 根据当前 range 从 dcf dict 里拿对应预测期的 FV 与截断的年份数组
+      function pickHorizon(dcf) {{
+        const map = {{'1y': 1, '3y': 3, '5y': 5}};
+        const n = map[currentRange] || 5;
+        const fvKey = 'fv_' + n + 'y';
+        return {{
+          n,
+          fv: (dcf && dcf[fvKey] != null) ? dcf[fvKey] : null,
+          years: (dcf && Array.isArray(dcf.years)) ? dcf.years.slice(0, n) : []
+        }};
+      }}
+      // 渲染一张 ticker 卡片; 数据完整则显示 FV+假设+逐年表, 否则显示缺失原因
+      function renderDcfCard(ticker) {{
+        const dcf   = DCF_DATA[ticker];
+        const snap  = SNAPSHOT[ticker] || {{}};
+        const price = snap.close;
+        const cur   = (dcf && dcf.currency) || snap.currency || '';
+        const isETF = ETF_SET.has(ticker);
+
+        // ETF: 语义上不做 DCF (Tab 会被隐藏, 走到这里理论上不会发生, 但保底)
+        if (isETF) {{
+          return `<div class="dcf-card dcf-empty">`
+               +   `<div class="dcf-card-head"><b>${{ticker}}</b> · N/A</div>`
+               +   `<div class="dcf-empty-msg">ETF 组合层面无 DCF 概念, 未做建模。</div>`
+               + `</div>`;
+        }}
+        if (!dcf) {{
+          return `<div class="dcf-card dcf-empty">`
+               +   `<div class="dcf-card-head"><b>${{ticker}}</b> · N/A</div>`
+               +   `<div class="dcf-empty-msg">`
+               +     `DCF 数据缺失。可能原因: `
+               +     `<br/>· FMP 免费版不覆盖该 ticker (港股 / 小市值常见)`
+               +     `<br/>· 生成快照时 <code>FMP_API_KEY</code> 未设置`
+               +     `<br/>· FMP 每日免费额度耗尽 (250 次/天)`
+               +   `</div>`
+               + `</div>`;
+        }}
+
+        const hz     = pickHorizon(dcf);
+        const fv     = hz.fv;
+        const upside = (fv != null && price) ? (fv - price) / price * 100.0 : null;
+        const upClass = upside == null ? '' : (upside >= 0 ? 'pos' : 'neg');
+        const upSign  = upside == null ? '' : (upside >= 0 ? '+' : '');
+
+        const wacc   = dcf.wacc, g = dcf.g, shares = dcf.shares, nd = dcf.net_debt;
+        // 逐年折现表: year / FCF / discount factor / PV
+        let rowsHtml = '';
+        let cumPV = 0;
+        for (let i = 0; i < hz.years.length; i++) {{
+          const e = hz.years[i];
+          const disc = Math.pow(1 + (wacc||0)/100, i + 1);
+          const pv   = e.fcf / disc;
+          cumPV += pv;
+          rowsHtml += `<tr>`
+                    +   `<td>${{e.year}}</td>`
+                    +   `<td class="num">${{fmtBig(e.fcf)}}</td>`
+                    +   `<td class="num">÷(1+${{fmtPct(wacc,2)}})<sup>${{i+1}}</sup> = ${{disc.toFixed(3)}}</td>`
+                    +   `<td class="num">${{fmtBig(pv)}}</td>`
+                    + `</tr>`;
+        }}
+        // 终值: TV = FCF_N * (1+g) / (WACC-g); TV_PV = TV / (1+WACC)^N
+        let tvHtml = '';
+        const lastFcf = hz.years.length ? hz.years[hz.years.length - 1].fcf : null;
+        if (lastFcf != null && wacc != null && g != null && wacc > g) {{
+          const tv    = lastFcf * (1 + g/100) / ((wacc - g)/100);
+          const disc  = Math.pow(1 + wacc/100, hz.years.length);
+          const tvPV  = tv / disc;
+          tvHtml = `<tr class="dcf-tv-row">`
+                 +   `<td>TV @ Y${{hz.n}}</td>`
+                 +   `<td class="num">${{fmtBig(tv)}}</td>`
+                 +   `<td class="num">÷${{disc.toFixed(3)}}</td>`
+                 +   `<td class="num">${{fmtBig(tvPV)}}</td>`
+                 + `</tr>`;
+        }}
+
+        return `<div class="dcf-card">`
+             +   `<div class="dcf-card-head">`
+             +     `<div class="dcf-title"><b>${{ticker}}</b> <span class="dcf-sub">${{hz.n}}Y projection · ${{cur||''}}</span></div>`
+             +     `<div class="dcf-fv">`
+             +       `<div class="dcf-fv-main">Fair Value <b>${{fmtMoney(fv)}}</b></div>`
+             +       `<div class="dcf-fv-sub">Current ${{fmtMoney(price)}} · <span class="dcf-upside ${{upClass}}">Upside ${{upside==null?'N/A':upSign+upside.toFixed(1)+'%'}}</span></div>`
+             +     `</div>`
+             +   `</div>`
+             +   `<div class="dcf-assump">`
+             +     `<span><b>WACC</b> ${{fmtPct(wacc)}}</span>`
+             +     `<span><b>Terminal g</b> ${{fmtPct(g)}}</span>`
+             +     `<span><b>Shares</b> ${{fmtBig(shares)}}</span>`
+             +     `<span><b>Net Debt</b> ${{fmtBig(nd)}}</span>`
+             +   `</div>`
+             +   `<table class="dcf-table">`
+             +     `<thead><tr><th>Year</th><th>FCF</th><th>Discount</th><th>PV</th></tr></thead>`
+             +     `<tbody>${{rowsHtml}}${{tvHtml}}</tbody>`
+             +   `</table>`
+             + `</div>`;
+      }}
+      function renderDcfTab() {{
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+        titleE.textContent = METRIC_META.dcf.title;
+
+        // 副标题: 明确"这是未来 N 年"、数据源、抓取时间
+        // 从选中集合里挑第一个有 dcf.asof 的作为署名日期（各 ticker 抓取日期一致）
+        let asof = null;
+        for (const t of selected.keys()) {{
+          const d = DCF_DATA[t];
+          if (d && d.asof) {{ asof = d.asof; break; }}
+        }}
+        const nMap = {{'1y': 1, '3y': 3, '5y': 5}};
+        const n = nMap[currentRange] || 5;
+        subE.textContent =
+          `Future ${{n}}Y explicit projection + Gordon terminal value` +
+          ` · source financialmodelingprep.com` +
+          (asof ? ` · as of ${{asof}}` : '');
+
+        // 内容: 无选中 ticker 时给操作提示; 否则并排 (响应式) 渲染每张卡片
+        if (selected.size === 0) {{
+          body.innerHTML = `<div class="chart-empty">`
+                         + `点击左侧任一 ticker 载入其 DCF 明细.<br/>`
+                         + `多选可并排比较. 切换上方 1Y / 3Y / 5Y 可查看不同预测期长度下的 Fair Value.`
+                         + `</div>`;
+          legendE.innerHTML = '';
+          selectedE.innerHTML = '';
+        }} else {{
+          const cards = Array.from(selected.keys()).map(renderDcfCard).join('');
+          body.innerHTML = `<div class="dcf-grid">${{cards}}</div>`;
+          legendE.innerHTML = '';
+          // selectedE 徽章格式与常规 render() 保持一致 (.sel-chip)
+          selectedE.innerHTML = Array.from(selected.entries()).map(([t, c]) =>
+            `<span class="sel-chip" style="border-color:${{c}};color:${{c}}">${{logoImg(t)}}<span class="tk-sym">${{t}}</span></span>`
+          ).join('');
+        }}
+
+        // 说明条: 详细介绍数据来源 / 公式 / 时间范围 / 假设 / 免责声明,
+        // 让"整个过程透明化"这个诉求落地——用户能在 UI 上直接读到 DCF 的所有底细
+        formulaE.classList.add('show');
+        formulaE.innerHTML =
+          `<span class="cf-tag">METHOD</span>` +
+          `<b>两段式 DCF (Discounted Cash Flow)</b>: 未来 ${{n}} 年逐年折现 + Gordon Growth 永续价值.` +
+          `<br/><br/>` +
+          `<span class="cf-tag">FORMULA</span>` +
+          `<code>FV<sub>share</sub> = ( Σ<sub>t=1..${{n}}</sub> FCF<sub>t</sub> / (1+WACC)<sup>t</sup> ` +
+          `+ FCF<sub>${{n}}</sub>·(1+g) / (WACC−g) / (1+WACC)<sup>${{n}}</sup> − NetDebt ) / Shares</code>` +
+          `<br/><br/>` +
+          `<span class="cf-tag">INPUTS</span>` +
+          `<b>FCF</b> = 逐年 Unlevered Free Cash Flow 预测 (来自 FMP, 综合分析师共识与历史增速外推).` +
+          ` <b>WACC</b> = 加权平均资本成本 (股权 + 债务, 税后).` +
+          ` <b>g</b> = 永续增长率 (通常锚定长期通胀 2.5% 附近).` +
+          ` <b>NetDebt</b> = 有息负债 − 现金. <b>Shares</b> = 稀释股本.` +
+          `<br/><br/>` +
+          `<span class="cf-tag">HORIZON</span>` +
+          `<b>${{n}}Y</b> = 显式预测未来 ${{n}} 年现金流, 之后进入永续期. ` +
+          `切换上方 1Y / 3Y / 5Y 可查看不同预测长度对 FV 的影响: ` +
+          `预测期越短, 越依赖终值 (对 g 敏感); 预测期越长, 越依赖分析师预测能力 (对 FCF 敏感).` +
+          `<br/><br/>` +
+          `<span class="cf-tag">CAVEAT</span>` +
+          `DCF 对假设高度敏感——<b>WACC ±1% 可致 FV ±10-20%</b>. ` +
+          `所展示的 <b>FV 仅为单点估算</b>, 不含敏感性区间; 且 <b>不做历史序列</b>` +
+          ` (用今日 FCF 预测倒推过去等同后视镜偏差, 无信息价值). 仅供参考, 非投资建议.`;
+
+        // 更新徽章选中态 (与 render() 里的逻辑一致)
+        document.querySelectorAll('.tk-badge').forEach(b => {{
+          const t = b.dataset.ticker;
+          b.classList.toggle('selected', selected.has(t));
+          if (selected.has(t)) b.style.setProperty('--sel', selected.get(t));
+          else b.style.removeProperty('--sel');
+        }});
+      }}
+
       function render() {{
+        // 每次渲染前先同步 Tab 可见性——选中集合发生变化时（新增/移除 ETF）也需要立即反映。
+        syncTabVisibility();
+
         const bucket  = HISTORY_DATA[currentRange] || {{}};
         const dataMap = bucket[currentMetric] || {{}};
         const meta    = METRIC_META[currentMetric];
         const rmeta   = RANGE_META[currentRange];
         titleE.textContent = meta.title;
+
+        // DCF Tab: 单卡片视图。range 按钮 (1Y / 3Y / 5Y) 语义切换为"预测期长度",
+        // 副标题会标明这一点; 每个选中的 ticker 渲染一张 DCF 卡片, 卡片内详列
+        // FV/现价/Upside%、WACC、g、净债务、股本、逐年 FCF 及折现累加过程 (完全透明化)。
+        if (currentMetric === 'dcf') {{
+          renderDcfTab();
+          return;
+        }}
 
         // 副标题：range · freq · 各 ticker 的数据源。曲线所需的数据源可能不同
         // （个股走 stockanalysis.com、ETF 走 multpl / siblis 指数代理），因此按当前
@@ -2171,6 +2667,8 @@ _HTML_TEMPLATE = """<!doctype html>
         t.addEventListener('click', () => {{
           const m = t.dataset.metric;
           if (m === currentMetric) return;
+          // 若该 tab 已被隐藏（例如选中的是 ETF, 而点的是 EV/EBIT 或 DCF）, 忽略。
+          if (t.classList.contains('hidden')) return;
           currentMetric = m;
           tabs.forEach(x => {{
             const on = x.dataset.metric === m;
@@ -2180,6 +2678,29 @@ _HTML_TEMPLATE = """<!doctype html>
           render();
         }});
       }});
+
+      // 根据当前选中的 ticker 集合动态调整 Tab 可见性:
+      //   - 只要选中的集合里包含任何 ETF, 则隐藏 EV/EBIT 与 DCF (两者对 ETF 均无意义);
+      //   - 若当前 metric 恰好是被隐藏的, 自动回退到 P/E, 保持视图有内容。
+      // 空选中集合视为"未开始", 全部 Tab 保持可见。
+      function syncTabVisibility() {{
+        const hasETF = Array.from(selected.keys()).some(t => ETF_SET.has(t));
+        tabs.forEach(x => {{
+          const m = x.dataset.metric;
+          const hide = hasETF && (m === 'evebit' || m === 'dcf');
+          x.classList.toggle('hidden', hide);
+          if (hide) x.setAttribute('aria-hidden', 'true');
+          else      x.removeAttribute('aria-hidden');
+        }});
+        if (hasETF && (currentMetric === 'evebit' || currentMetric === 'dcf')) {{
+          currentMetric = 'pe';
+          tabs.forEach(x => {{
+            const on = x.dataset.metric === 'pe';
+            x.classList.toggle('active', on);
+            x.setAttribute('aria-selected', on ? 'true' : 'false');
+          }});
+        }}
+      }}
       rangeBtns.forEach(b => {{
         b.addEventListener('click', () => {{
           const r = b.dataset.range;
@@ -2303,6 +2824,8 @@ def build_html_report(
     pe_source_json = json.dumps(pe_source, ensure_ascii=False)
     fwd_source_json = json.dumps(fwd_source, ensure_ascii=False)
     logo_map_json = json.dumps(LOGO_DOMAIN, ensure_ascii=False)
+    # ETF 集合注入前端, 用于动态隐藏对 ETF 无意义的 Tab (EV/EBIT / DCF)。
+    etf_set_json = json.dumps([t.upper() for t in ETFs], ensure_ascii=False)
 
     # 每个 ticker 的当前快照，供前端在均值虚线右端反推"若估值回到均值时的隐含股价"
     #   P/E 情形:    implied_price = avg_pe / snap_pe * close   (= avg_pe * EPS_TTM)
@@ -2328,6 +2851,15 @@ def build_html_report(
                 "currency": cur,
             }
     snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+
+    # DCF 数据 map: ticker -> Row.dcf dict (可能为 None; 前端 DCF Tab 会渲染缺失原因)。
+    # ETF 与所有抓取失败 / 无 key 的 ticker 都会缺失, 前端负责给出可读提示。
+    dcf_map: dict[str, dict] = {}
+    for _title, rows, _cur in sections:
+        for r in rows:
+            if r.dcf:
+                dcf_map[r.symbol] = r.dcf
+    dcf_json = json.dumps(dcf_map, ensure_ascii=False)
 
     # -------- 稳定的数据契约块 (vs-data / schema v1) --------
     # 目的: 让未来任意时间点写的爬虫都能从 Pages/ 里 520 份历史 HTML 中稳定抽出结构化数据,
@@ -2378,6 +2910,9 @@ def build_html_report(
                 "ev_ebit_history_5y": (
                     [[d, v] for d, v in r.ev_ebit_history] if r.ev_ebit_history else []
                 ),
+                # DCF 明细 (来源: FMP advanced_discounted_cash_flow), 未抓到时缺此字段。
+                # 前端 DCF Tab 会渲染 FV/share, WACC, g, 逐年 FCF, 折现累加过程等透明化字段。
+                "dcf": r.dcf,
             }
     vs_data = {
         "schema": 1,
@@ -2402,7 +2937,9 @@ def build_html_report(
         pe_source_json=pe_source_json,
         fwd_source_json=fwd_source_json,
         logo_map_json=logo_map_json,
+        etf_set_json=etf_set_json,
         snapshot_json=snapshot_json,
+        dcf_json=dcf_json,
         favicon_link=_favicon_link_tag(),
         vs_data_json=vs_data_json,
     )
@@ -2524,6 +3061,17 @@ def main() -> int:
     etf_rows = _fetch_list(ETFs, "ETF")
     us_rows = _fetch_list(USStocks, "US")
     hk_rows = _fetch_list(HKStocks, "HK")
+
+    # DCF 抓取: 遍历所有个股 (跳过 ETF), 调用 FMP `advanced_discounted_cash_flow`。
+    # 该调用不阻塞主流程——缺 key / 网络失败 / ticker 不支持时函数返回 None,
+    # 前端 DCF Tab 会给出对应的缺失原因说明。抓取放在收盘价 / 财务数据之后, 是因为
+    # DCF 数据完全独立, 且失败率相对高 (小市值 / 港股 FMP 覆盖不全), 集中在一个阶段
+    # 便于 CI 日志排查。
+    print("\n> Fetching DCF from FMP (only stocks, ETFs skipped)...", file=sys.stderr)
+    for r in us_rows:
+        r.dcf = _fetch_fmp_dcf(r.symbol, "US")
+    for r in hk_rows:
+        r.dcf = _fetch_fmp_dcf(r.symbol, "HK")
 
     now = datetime.now()
     html_doc = build_html_report(
