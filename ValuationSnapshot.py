@@ -66,7 +66,12 @@ HKStocks = [
 # ETF 走独立的 /etf/{t}/ 主页, 主页 HTML 里内嵌一段 JSON 汇总了 ETF 层面的关键字段
 # (peRatio / aum / nav / expenseRatio / dividendYield / sharesOut / dps / beta 等)。
 # 我们把 peRatio 填入 PE 列, aum 填入 MarketCap 列; 其余对 ETF 语义上不适用的字段
-# (EV/EBIT, EV/EBITDA, PE Fwd, PEG, EBIT, Debt, Cash) 一律保留为 None -> 前端显示 "-"。
+# (EV/EBIT, EV/EBITDA, PEG, EBIT, Debt, Cash) 一律保留为 None -> 前端显示 "-"。
+#
+# Forward P/E ("PE Fwd" 列) 走各自的**发行商官方**基金 characteristics 数据源:
+#   SPYM -> SSGA 官网 SPYM SSR HTML (weighted harmonic FY1, FactSet Estimates, 月频)
+#   QQQM -> Invesco dng-api JSON      (weighted harmonic forward P/E, 日频)
+#   VUG  -> Vanguard characteristics endpoint 未公开加权前瞻 P/E, 保持 None
 #
 # 历史 P/E 曲线走"指数代理": ETF 组合层面无公开时序, 因此改抓 ETF 所跟踪指数的历史 P/E。
 #   SPYM -> S&P 500        (multpl.com, 月频, 50+ 年)
@@ -90,6 +95,19 @@ ETF_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
              "https://siblisresearch.com/data/nasdaq-100-pe-ratio/",
              "siblis_ndx"),
     "VUG":  None,   # CRSP US Large Cap Growth: no public historical PE source
+}
+
+# ETF -> 当前 Forward P/E 数据源 (发行商官方最新月度/日度公布值)。None 表示未开放。
+# key = ETF ticker (upper), value = (label, url_or_cusip, parser_name)
+# label 显示在表格 P/E (Fwd) 单元格的 tooltip 里, 明确"此前瞻 P/E 出自发行商"。
+ETF_FWD_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
+    "SPYM": ("SSGA · Price/Earnings Ratio FY1 (FactSet Estimates, weighted harmonic)",
+             "https://www.ssga.com/us/en/individual/etfs/spdr-portfolio-sp-500-etf-spym",
+             "ssga_html"),
+    "QQQM": ("Invesco dng-api · forwardPriceToEarningsRatio (weighted harmonic)",
+             "46138G649",   # QQQM CUSIP; API 通过 idType=cusip 查询
+             "invesco_api"),
+    "VUG":  None,   # Vanguard characteristics endpoint 未开放加权前瞻 P/E
 }
 
 # ---------- 公司 logo 域名映射 ----------
@@ -161,6 +179,9 @@ class Row:
     # 该 ticker 的 P/E 曲线数据源署名（个股为 "stockanalysis.com"; ETF 为指数代理源；
     # None 表示无历史序列 -> 前端不显示单独数据源标注）
     pe_history_source: str | None = None
+    # 该 ticker 的 Forward P/E 数据源署名（仅 ETF 使用, 显示在表格 P/E (Fwd) 单元格 tooltip 里；
+    # 个股由 stockanalysis statistics 页直接给出, 不额外标注, 保持 None）
+    pe_forward_source: str | None = None
 
 
 # ---------- URL 构造 ----------
@@ -419,6 +440,85 @@ def parse_siblis_ndx_pe(html: str, limit: int = 60) -> list[tuple[str, float]]:
     out = out[:limit]
     out.reverse()
     return out
+
+
+# ---------- 抓取：ETF 发行商官方 Forward P/E（"P/E (Fwd)" 列的当前值） ----------
+#
+# ETF 组合层面的加权前瞻 P/E 由发行商每月/每日更新，是行业标准做法：
+#   SSGA (SPYM): SSR HTML 里明文写 "Price/Earnings Ratio FY1 <td>21.58</td>"
+#                (数据源: FactSet Estimates, weighted harmonic, 月度更新)
+#   Invesco (QQQM): dng-api JSON 直接返回 forwardPriceToEarningsRatio
+#                (数据源: 加权 harmonic, 每日更新)
+# 两个源都保留原始数值精度, 由前端 _cell_html 统一 :.2f 格式化, 与其他 P/E 列一致。
+
+
+# SSGA HTML 里"Price/Earnings Ratio FY1"表格行结构非常稳定, 用一行正则即可:
+#   <th ... > Price/Earnings Ratio FY1 <...> </th> <td class="data">21.58</td>
+# 注意 label 和 <td> 之间可能夹着 <span class="info">... tooltip ...</span>,
+# 因此中间用 .*? 非贪婪吃掉。
+_PAT_SSGA_FY1 = re.compile(
+    r'Price/Earnings\s+Ratio\s+FY1.*?<td[^>]*class="data"[^>]*>\s*([\d.,]+)\s*</td>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def fetch_ssga_forward_pe(url: str) -> float | None:
+    """抓 SSGA ETF 页面, 提取 Price/Earnings Ratio FY1 (weighted harmonic FY1)。
+
+    SSGA 每月月末更新, 数据源 FactSet Estimates。抓取失败或数值不合理时返回 None。
+    """
+    html_str = _get(url)
+    if not html_str:
+        return None
+    m = _PAT_SSGA_FY1.search(html_str)
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    # sanity: FY1 P/E 通常在 5 ~ 200 之间, 超出视为解析异常
+    if v <= 0 or v > 500:
+        return None
+    return v
+
+
+def fetch_invesco_forward_pe(cusip: str) -> float | None:
+    """通过 Invesco dng-api 拿 fundCharacteristics.forwardPriceToEarningsRatio。
+
+    URL 模式:
+      https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/{cusip}
+        ?expand=nav&idType=cusip&variationType=fundCharacteristics&productType=ETF
+
+    返回加权 harmonic forward P/E, effectiveDate 通常滞后 1 个月末点。
+    """
+    api = (
+        f"https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/{cusip}"
+        f"?expand=nav&idType=cusip&variationType=fundCharacteristics&productType=ETF"
+    )
+    req = urllib.request.Request(api, headers={
+        "User-Agent": UA,
+        "Accept": "application/json",
+        "Referer": "https://www.invesco.com/",
+        "Origin": "https://www.invesco.com",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read()
+    except Exception as e:
+        print(f"  !! Invesco API {api} failed: {e}", file=sys.stderr)
+        return None
+    try:
+        j = json.loads(body.decode("utf-8", errors="replace"))
+    except Exception as e:
+        print(f"  !! Invesco API parse failed: {e}", file=sys.stderr)
+        return None
+    v = j.get("forwardPriceToEarningsRatio")
+    if not isinstance(v, (int, float)):
+        return None
+    if v <= 0 or v > 500:
+        return None
+    return float(v)
 
 
 # ---------- 解析：ratios 页（TTM 时间序列，如 PE / EV-EBIT） ----------
@@ -762,6 +862,26 @@ def _fetch_etf(ticker: str) -> Row:
         # 字符串, 前端表格会原样显示 "229.61B"。
         row[FIELDS["marketcap"]] = aum_raw.lstrip("$").strip() or aum_raw
 
+    # -------- 发行商官方 Forward P/E (ETF 组合加权前瞻 P/E) --------
+    # 来自 ETF_FWD_PE_SOURCE 配置: SPYM 走 SSGA HTML, QQQM 走 Invesco dng-api,
+    # VUG 无源保持 None。Row.pe_forward_source 记录数据源标签, 前端在
+    # "P/E (Fwd)" 单元格的 title tooltip 里明确出处。
+    fwd_pe_source_label: str | None = None
+    fwd_src = ETF_FWD_PE_SOURCE.get(ticker.upper())
+    if fwd_src is not None:
+        fwd_label, fwd_arg, fwd_parser = fwd_src
+        fwd_val: float | None = None
+        if fwd_parser == "ssga_html":
+            fwd_val = fetch_ssga_forward_pe(fwd_arg)
+        elif fwd_parser == "invesco_api":
+            fwd_val = fetch_invesco_forward_pe(fwd_arg)
+        if fwd_val is not None:
+            # 与其他 P/E 列的字符串格式保持一致 (2 位小数, 供 _parse_num 再解析)
+            row[FIELDS["peForward"]] = f"{fwd_val:.2f}"
+            fwd_pe_source_label = fwd_label
+        else:
+            print(f"  .. {ticker}: forward P/E unavailable from {fwd_label}", file=sys.stderr)
+
     # -------- 指数代理: 历史 P/E 时序 --------
     # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个季末点 (NDX 免费版), 3Y = 5Y 尾部切片，
     # 1Y = 5Y 数组的更小尾部切片（月度 12 点 / 季度 4 点）。
@@ -827,11 +947,14 @@ def _fetch_etf(ticker: str) -> Row:
                 r.pe_history_3y = pe_hist[-take_3y:] if len(pe_hist) > take_3y else list(pe_hist)
                 r.pe_history_1y = pe_hist[-take_1y:] if len(pe_hist) > take_1y else list(pe_hist)
             r.pe_history_source = label
+            r.pe_forward_source = fwd_pe_source_label
             return r
         else:
             print(f"  .. {ticker}: index PE history unavailable ({url})", file=sys.stderr)
 
-    return Row(ticker, row)
+    tail = Row(ticker, row)
+    tail.pe_forward_source = fwd_pe_source_label
+    return tail
 
 
 def fetch_ticker(ticker: str, market: str) -> Row:
@@ -1259,6 +1382,13 @@ _HTML_TEMPLATE = """<!doctype html>
   td.asof {{ color: var(--muted); font-size: 12.5px; }}
   td.close {{ font-weight: 600; }}
   td.na {{ color: var(--muted); }}
+  /* 单元格右上角小圆点: 提示"悬停可见数据源" (给 ETF 的 P/E Fwd 用) */
+  td.num.has-src {{ position: relative; cursor: help; }}
+  td.num.has-src::after {{
+    content: ''; position: absolute; top: 6px; right: 6px;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent); opacity: .55;
+  }}
   .tk-badge {{
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; border-radius: 8px;
@@ -1565,6 +1695,9 @@ _HTML_TEMPLATE = """<!doctype html>
     //   "S&P 500 Index P/E (TTM) · multpl.com"）。未收录的 ticker 表示无历史序列。
     //   render() 会按当前选中的 ticker 集合动态拼接到图表副标题，做到"每条曲线都有出处"。
     const PE_SOURCE = {pe_source_json};
+    // ticker -> Forward P/E (P/E Fwd 列) 的数据源标签（仅 ETF 有值, 例 SSGA/Invesco）。
+    // 页面加载后会给对应 ticker 行的 "P/E (Fwd)" 单元格追加 title tooltip, 悬停可见出处。
+    const FWD_SOURCE = {fwd_source_json};
     // ticker -> 公司主页域名，用于 Google s2 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {logo_map_json};
     // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
@@ -1977,6 +2110,32 @@ _HTML_TEMPLATE = """<!doctype html>
         render();
       }});
       window.addEventListener('resize', () => {{ if (selected.size) render(); }});
+
+      // ---- 给 ETF 的 "P/E (Fwd)" 单元格追加数据源 tooltip ----
+      // 先按表头文本定位 "P/E (Fwd)" 列的索引（每个 section 表头可能相同, 但保险起见按表逐个定位）,
+      // 再对 tbody 里每一行匹配 data-ticker, 命中 FWD_SOURCE 就写 title 属性 + 加视觉提示 class。
+      (function annotateFwdSource() {{
+        if (!FWD_SOURCE || Object.keys(FWD_SOURCE).length === 0) return;
+        document.querySelectorAll('table').forEach(tbl => {{
+          const ths = tbl.querySelectorAll('thead th');
+          let fwdIdx = -1;
+          ths.forEach((th, i) => {{
+            // 表头是 "P/E&nbsp;(Fwd)" -> textContent 变成 "P/E (Fwd)"
+            const txt = (th.textContent || '').replace(/\s+/g, ' ').trim();
+            if (txt === 'P/E (Fwd)') fwdIdx = i;
+          }});
+          if (fwdIdx < 0) return;
+          tbl.querySelectorAll('tbody tr[data-ticker]').forEach(tr => {{
+            const sym = tr.getAttribute('data-ticker');
+            const label = FWD_SOURCE[sym];
+            if (!label) return;
+            const cell = tr.children[fwdIdx];
+            if (!cell) return;
+            cell.setAttribute('title', 'Source: ' + label);
+            cell.classList.add('has-src');
+          }});
+        }});
+      }})();
     }})();
   </script>
 </body>
@@ -2023,6 +2182,8 @@ def build_html_report(
     ev_1y: dict[str, list[list]] = {}
     # ticker -> P/E 历史数据源标签（前端图表副标题按选中 ticker 拼接显示）
     pe_source: dict[str, str] = {}
+    # ticker -> Forward P/E 数据源标签（仅 ETF 有值, 表格 P/E (Fwd) 单元格 title tooltip）
+    fwd_source: dict[str, str] = {}
     for _title, rows, _cur in sections:
         for r in rows:
             if r.pe_history:
@@ -2042,6 +2203,9 @@ def build_html_report(
                 pe_source[r.symbol] = r.pe_history_source
             elif r.pe_history:
                 pe_source[r.symbol] = "stockanalysis.com · quarterly TTM"
+            # Forward P/E 数据源 (仅 ETF, 个股不额外标注)
+            if r.pe_forward_source:
+                fwd_source[r.symbol] = r.pe_forward_source
     pe_5y_json = json.dumps(pe_5y, ensure_ascii=False)
     ev_5y_json = json.dumps(ev_5y, ensure_ascii=False)
     pe_3y_json = json.dumps(pe_3y, ensure_ascii=False)
@@ -2049,6 +2213,7 @@ def build_html_report(
     pe_1y_json = json.dumps(pe_1y, ensure_ascii=False)
     ev_1y_json = json.dumps(ev_1y, ensure_ascii=False)
     pe_source_json = json.dumps(pe_source, ensure_ascii=False)
+    fwd_source_json = json.dumps(fwd_source, ensure_ascii=False)
     logo_map_json = json.dumps(LOGO_DOMAIN, ensure_ascii=False)
 
     # 每个 ticker 的当前快照，供前端在均值虚线右端反推"若估值回到均值时的隐含股价"
@@ -2086,6 +2251,7 @@ def build_html_report(
         pe_1y_json=pe_1y_json,
         ev_1y_json=ev_1y_json,
         pe_source_json=pe_source_json,
+        fwd_source_json=fwd_source_json,
         logo_map_json=logo_map_json,
         snapshot_json=snapshot_json,
         favicon_link=_favicon_link_tag(),

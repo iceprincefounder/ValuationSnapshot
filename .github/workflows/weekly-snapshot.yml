@@ -1,0 +1,82 @@
+# 每周自动生成 ValuationSnapshot 报告并部署到 GitHub Pages。
+#
+# 触发时机:
+#   1) 定时: 每周六 北京时间 06:00 (= UTC 周五 22:00) 自动跑一次。
+#      cron 用 UTC, GitHub 官方不保证准时, 高峰时段可能延迟 15~60 分钟。
+#   2) 手动触发 (workflow_dispatch), 便于临时补跑或调试。
+#
+# 行为:
+#   - checkout -> 直接 `python ValuationSnapshot.py` (脚本只用标准库, 无需 pip)
+#   - 脚本对所有外部数据源都是软失败: 反爬/超时 -> 对应字段留空, 不影响退出码
+#   - 如果 Pages/ 有变化, 用 github-actions[bot] 身份 commit + push 回 main
+#   - 同一个 job 内直接调用官方 Pages action 完成部署
+#     (避开 "GITHUB_TOKEN 推的 commit 不会触发另一个 workflow" 的坑)
+#
+# 与 deploy-pages.yml 的分工:
+#   - deploy-pages.yml: 你本地手动 push Pages/ 时触发
+#   - 本 workflow    : 每周六定时全自动跑; 二者互不干扰 (concurrency group 相同, 排队执行)
+name: Weekly Snapshot
+
+on:
+  schedule:
+    # 分 时 日 月 周 -- UTC 周五 22:00 = 北京时间 周六 06:00
+    - cron: "0 22 * * 5"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 需要 push 生成的 HTML 回仓库
+  pages: write      # 部署 Pages
+  id-token: write   # deploy-pages action 需要
+
+# 与 deploy-pages.yml 共用同一 group, 避免两个 workflow 同时部署互相打架
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run ValuationSnapshot
+        # 脚本零外部依赖, 直接跑。BROWSER=echo 让 webbrowser.open 在
+        # headless runner 上找不到 display 时彻底静默 (不影响退出码)。
+        env:
+          BROWSER: echo
+        run: python ValuationSnapshot.py
+
+      - name: Commit updated Pages
+        # 只有 Pages/ 真的变了才提交, 免得留一堆空 commit。
+        # 作者身份是 github-actions[bot], 邮箱是 GitHub 官方给 bot 的固定地址。
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Pages/
+          if git diff --cached --quiet; then
+            echo "No Pages changes to commit."
+          else
+            git commit -m "chore: weekly snapshot $(date -u +'%Y-%m-%d')"
+            git push
+          fi
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./Pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

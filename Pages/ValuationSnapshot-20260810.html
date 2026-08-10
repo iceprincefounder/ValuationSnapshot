@@ -131,6 +131,13 @@
   td.asof { color: var(--muted); font-size: 12.5px; }
   td.close { font-weight: 600; }
   td.na { color: var(--muted); }
+  /* 单元格右上角小圆点: 提示"悬停可见数据源" (给 ETF 的 P/E Fwd 用) */
+  td.num.has-src { position: relative; cursor: help; }
+  td.num.has-src::after {
+    content: ''; position: absolute; top: 6px; right: 6px;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent); opacity: .55;
+  }
   .tk-badge {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; border-radius: 8px;
@@ -372,7 +379,7 @@
           <h1>Valuation Snapshot</h1>
           <span class="gen-badge" title="Report generation time">
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-            2026-08-10 12:34:33
+            2026-08-10 13:01:59
           </span>
         </div>
         <div class="sub">
@@ -401,7 +408,7 @@
         <table>
           <thead><tr><th>Ticker</th><th>Close</th><th>As&nbsp;Of</th><th>Market Cap</th><th>EV</th><th>Total Debt</th><th>Cash&nbsp;+&nbsp;STI</th><th>EBIT&nbsp;(TTM)</th><th>EV&nbsp;/&nbsp;EBIT</th><th>EV&nbsp;/&nbsp;EBITDA</th><th>P/E&nbsp;(TTM)</th><th>P/E&nbsp;(Fwd)</th><th>PEG</th></tr></thead>
           <tbody>
-            <tr data-ticker="VUG"><td class="ticker"><button type="button" class="tk-badge" data-ticker="VUG" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="vanguard.com" src="https://www.google.com/s2/favicons?domain=vanguard.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">VUG</span></button></td><td class="num close">89.40</td><td class="asof">Aug 7, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">229.61B</span></td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric bad">36.65</td><td class="num na">—</td><td class="num na">—</td></tr><tr data-ticker="QQQM"><td class="ticker"><button type="button" class="tk-badge" data-ticker="QQQM" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="invesco.com" src="https://www.google.com/s2/favicons?domain=invesco.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">QQQM</span></button></td><td class="num close">297.70</td><td class="asof">Aug 7, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">97.11B</span></td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric bad">33.95</td><td class="num na">—</td><td class="num na">—</td></tr><tr data-ticker="SPYM"><td class="ticker"><button type="button" class="tk-badge" data-ticker="SPYM" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="ssga.com" src="https://www.google.com/s2/favicons?domain=ssga.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">SPYM</span></button></td><td class="num close">91.01</td><td class="asof">Aug 7, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">157.41B</span></td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric mid">26.82</td><td class="num na">—</td><td class="num na">—</td></tr>
+            <tr data-ticker="VUG"><td class="ticker"><button type="button" class="tk-badge" data-ticker="VUG" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="vanguard.com" src="https://www.google.com/s2/favicons?domain=vanguard.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">VUG</span></button></td><td class="num close">89.40</td><td class="asof">Aug 7, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">229.61B</span></td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric bad">36.65</td><td class="num na">—</td><td class="num na">—</td></tr><tr data-ticker="QQQM"><td class="ticker"><button type="button" class="tk-badge" data-ticker="QQQM" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="invesco.com" src="https://www.google.com/s2/favicons?domain=invesco.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">QQQM</span></button></td><td class="num close">297.70</td><td class="asof">Aug 7, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">97.11B</span></td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric bad">33.95</td><td class="num metric mid">26.71</td><td class="num na">—</td></tr><tr data-ticker="SPYM"><td class="ticker"><button type="button" class="tk-badge" data-ticker="SPYM" data-market="USD"><img class="tk-logo" alt="" loading="lazy" data-domain="ssga.com" src="https://www.google.com/s2/favicons?domain=ssga.com&sz=64" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}else{this.style.display='none';}"><span class="tk-sym">SPYM</span></button></td><td class="num close">91.01</td><td class="asof">Aug 7, 2026, 4:00 PM EDT</td><td class="num money"><span class="val">157.41B</span></td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num na">—</td><td class="num metric mid">26.82</td><td class="num metric mid">21.59</td><td class="num na">—</td></tr>
           </tbody>
         </table>
       </div>
@@ -493,6 +500,9 @@
     //   "S&P 500 Index P/E (TTM) · multpl.com"）。未收录的 ticker 表示无历史序列。
     //   render() 会按当前选中的 ticker 集合动态拼接到图表副标题，做到"每条曲线都有出处"。
     const PE_SOURCE = {"QQQM": "Nasdaq 100 Index P/E (TTM) · siblisresearch.com", "SPYM": "S&P 500 Index P/E (TTM) · multpl.com", "AAPL": "stockanalysis.com · quarterly TTM", "MSFT": "stockanalysis.com · quarterly TTM", "GOOGL": "stockanalysis.com · quarterly TTM", "AMZN": "stockanalysis.com · quarterly TTM", "META": "stockanalysis.com · quarterly TTM", "KO": "stockanalysis.com · quarterly TTM", "PG": "stockanalysis.com · quarterly TTM", "JNJ": "stockanalysis.com · quarterly TTM", "UNH": "stockanalysis.com · quarterly TTM", "0700": "stockanalysis.com · quarterly TTM", "1810": "stockanalysis.com · quarterly TTM", "9988": "stockanalysis.com · quarterly TTM", "9618": "stockanalysis.com · quarterly TTM", "9992": "stockanalysis.com · quarterly TTM", "1211": "stockanalysis.com · quarterly TTM"};
+    // ticker -> Forward P/E (P/E Fwd 列) 的数据源标签（仅 ETF 有值, 例 SSGA/Invesco）。
+    // 页面加载后会给对应 ticker 行的 "P/E (Fwd)" 单元格追加 title tooltip, 悬停可见出处。
+    const FWD_SOURCE = {"QQQM": "Invesco dng-api · forwardPriceToEarningsRatio (weighted harmonic)", "SPYM": "SSGA · Price/Earnings Ratio FY1 (FactSet Estimates, weighted harmonic)"};
     // ticker -> 公司主页域名，用于 Google s2 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {"AAPL": "apple.com", "MSFT": "microsoft.com", "GOOGL": "abc.xyz", "AMZN": "amazon.com", "META": "meta.com", "KO": "coca-colacompany.com", "PG": "pg.com", "JNJ": "jnj.com", "UNH": "unitedhealthgroup.com", "0700": "tencent.com", "1810": "mi.com", "9988": "alibabagroup.com", "9618": "jd.com", "9992": "popmart.com", "1211": "byd.com", "VUG": "vanguard.com", "QQQM": "invesco.com", "SPYM": "ssga.com"};
     // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
@@ -905,6 +915,32 @@
         render();
       });
       window.addEventListener('resize', () => { if (selected.size) render(); });
+
+      // ---- 给 ETF 的 "P/E (Fwd)" 单元格追加数据源 tooltip ----
+      // 先按表头文本定位 "P/E (Fwd)" 列的索引（每个 section 表头可能相同, 但保险起见按表逐个定位）,
+      // 再对 tbody 里每一行匹配 data-ticker, 命中 FWD_SOURCE 就写 title 属性 + 加视觉提示 class。
+      (function annotateFwdSource() {
+        if (!FWD_SOURCE || Object.keys(FWD_SOURCE).length === 0) return;
+        document.querySelectorAll('table').forEach(tbl => {
+          const ths = tbl.querySelectorAll('thead th');
+          let fwdIdx = -1;
+          ths.forEach((th, i) => {
+            // 表头是 "P/E&nbsp;(Fwd)" -> textContent 变成 "P/E (Fwd)"
+            const txt = (th.textContent || '').replace(/\s+/g, ' ').trim();
+            if (txt === 'P/E (Fwd)') fwdIdx = i;
+          });
+          if (fwdIdx < 0) return;
+          tbl.querySelectorAll('tbody tr[data-ticker]').forEach(tr => {
+            const sym = tr.getAttribute('data-ticker');
+            const label = FWD_SOURCE[sym];
+            if (!label) return;
+            const cell = tr.children[fwdIdx];
+            if (!cell) return;
+            cell.setAttribute('title', 'Source: ' + label);
+            cell.classList.add('has-src');
+          });
+        });
+      })();
     })();
   </script>
 </body>

@@ -1,0 +1,49 @@
+# 将仓库 Pages/ 目录静态发布到 GitHub Pages。
+# 触发时机:
+#   1) push 到 main 且 Pages/** 或本 workflow 本身有变化;
+#   2) 手动触发 (workflow_dispatch), 方便在没有新 commit 时重新部署。
+# 前提: 本地运行 `python ValuationSnapshot.py` 生成新的 Pages/ValuationSnapshot-<日期>.html
+#      并 commit + push 后, 本 workflow 会自动接手部署。
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Pages/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+# GitHub Pages 官方部署 action 需要的最小权限集合。
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时刻只保留一次进行中的 Pages 部署; 排队中的新 run 会取消旧的等待 run,
+# 但不会中断已经在跑的 (cancel-in-progress: false), 避免部署过程被腰斩。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./Pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
