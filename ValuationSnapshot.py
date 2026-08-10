@@ -111,11 +111,11 @@ ETF_FWD_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
 }
 
 # ---------- 公司 logo 域名映射 ----------
-# 前端 <img> 主源使用国内可访问的 favicon 代理:
-#   https://favicon.cccyun.cc/<domain>
-# 失败时按序回退到 Google s2 (https://www.google.com/s2/favicons?domain=<d>&sz=64) →
-# DuckDuckGo (https://icons.duckduckgo.com/ip3/<d>.ico) → 隐藏。
-# 中国大陆读者靠 cccyun 命中；境外读者靠 Google/DDG 兜底，两边都能看到图标。
+# 每个域名对应的 favicon 已在脚本运行时抓取并缓存到 ``Pages/logos/<domain>.png``,
+# 图标随 commit 一同上传到 GitHub Pages. 前端 <img> 直接引用相对路径:
+#   src="../logos/<domain>.png"  (报告位于 Pages/<YYYY>/ 下, 用 ../ 跳出年份目录)
+# 优点: 不依赖任何第三方 favicon 服务, 国内外读者都能秒开; 图标即使原始来源域名将来
+# 变更, 历史快照依旧显示当时的 logo. 抓取源见 _LOGO_SOURCES (Google -> DDG).
 LOGO_DOMAIN: dict[str, str] = {
     # US
     "AAPL":  "apple.com",
@@ -261,6 +261,86 @@ def _get(url: str) -> str | None:
     except Exception as e:
         print(f"  !! GET {url} failed: {e}", file=sys.stderr)
         return None
+
+
+# ---------- 公司 logo 本地缓存 ----------
+# 图标存放位置: Pages/logos/<domain>.png
+# 缓存策略  : 已存在的文件不重复抓取 (favicon 不常变动); 抓取失败静默跳过, 前端 <img>
+#            的 onerror 自动隐藏, 不影响页面其他部分。
+# 抓取源    : Google s2 (高清 64px, 覆盖率最广) -> DuckDuckGo ip3 (备用, 覆盖非主流域名)。
+#            两者都在境外, GitHub Actions runner 均可访问; 本地开发环境如果被墙, 会
+#            退回到 "有多少缓存就用多少" 的降级模式, 不阻塞报告生成。
+
+_LOGO_SOURCES: tuple[str, ...] = (
+    "https://www.google.com/s2/favicons?domain={d}&sz=64",
+    "https://icons.duckduckgo.com/ip3/{d}.ico",
+)
+
+
+def _fetch_favicon_bytes(domain: str) -> bytes | None:
+    """依次尝试各个 favicon 源, 返回首个成功的字节流 (期望 png/ico), 全部失败返回 None。
+
+    仅返回体积在 [200 B, 200 KB] 内且看起来是图片的数据 (魔数校验), 过滤掉 Google
+    的 "1x1 透明占位图" (~120 B) 或 HTML 报错页。
+    """
+    import urllib.request
+    for tpl in _LOGO_SOURCES:
+        url = tpl.format(d=domain)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+        except Exception as e:
+            print(f"  .. favicon {domain} <- {url} failed: {e}", file=sys.stderr)
+            continue
+        if not data or len(data) < 200 or len(data) > 200 * 1024:
+            # 太小 = Google 占位, 太大 = 不太可能是 favicon, 都跳过
+            continue
+        # 图片魔数: PNG(89 50 4E 47) / ICO(00 00 01 00) / GIF(47 49 46) / JPEG(FF D8 FF)
+        head = data[:4]
+        if not (
+            head.startswith(b"\x89PNG")
+            or head.startswith(b"\x00\x00\x01\x00")
+            or head.startswith(b"GIF8")
+            or head.startswith(b"\xff\xd8\xff")
+        ):
+            continue
+        return data
+    return None
+
+
+def ensure_logo_cache(logos_dir: str) -> None:
+    """遍历 LOGO_DOMAIN, 为每个域名确保 ``<logos_dir>/<domain>.png`` 存在。
+
+    - 已存在: 跳过 (favicon 稳定, 不需重抓)。
+    - 不存在: 联网抓取, 成功则落盘。失败不抛异常, 前端 <img> 的 onerror 会隐藏。
+    每次运行只对新增/缺失的 ticker 做网络请求, 通常 20 个 ticker 首次运行后
+    后续都是 0 次网络请求, 与"随 commit 上传"的意图匹配 (只在必要时更新)。
+    """
+    import os
+    os.makedirs(logos_dir, exist_ok=True)
+    fetched = 0
+    for _sym, domain in LOGO_DOMAIN.items():
+        if not domain:
+            continue
+        path = os.path.join(logos_dir, f"{domain}.png")
+        if os.path.exists(path) and os.path.getsize(path) >= 200:
+            continue
+        print(f"Fetching favicon for {domain} ...", file=sys.stderr)
+        data = _fetch_favicon_bytes(domain)
+        if data is None:
+            print(f"  !! favicon miss: {domain} (all sources failed)", file=sys.stderr)
+            continue
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+            fetched += 1
+        except OSError as e:
+            print(f"  !! failed to write {path}: {e}", file=sys.stderr)
+    if fetched:
+        print(f"> logo cache: {fetched} new favicon(s) written to {logos_dir}", file=sys.stderr)
+
+
 
 
 # ---------- 解析：statistics 页 ----------
@@ -1204,18 +1284,14 @@ def render_section_html(title: str, rows: list[Row], currency: str) -> str:
     body_rows: list[str] = []
     for r in rows:
         domain = LOGO_DOMAIN.get(r.symbol, "")
-        # 主源使用国内可访问的 cccyun（Google favicon 代理），onerror 依次回退到
-        # Google s2 → DuckDuckGo → 隐藏。国内读者第一源即命中；境外读者若 cccyun
-        # 拒答（生僻域名 403），会自动升级到 Google/DDG。
+        # 图标从本地缓存加载: ``../logos/<domain>.png``.
+        # 报告位于 ``Pages/<YYYY>/`` 下, 用 ``../logos/`` 跳出年份目录到 Pages/logos/.
+        # 不再依赖 Google/DDG/cccyun 等第三方 favicon 服务, 国内外读者都能秒开;
+        # 抓取失败或首次运行网络不通时 png 缺失, onerror 会静默隐藏 <img>, 不影响其他内容.
         logo_html = (
             f'<img class="tk-logo" alt="" loading="lazy" '
-            f'data-domain="{html.escape(domain)}" data-fb="0" '
-            f'src="https://favicon.cccyun.cc/{html.escape(domain)}" '
-            f'onerror="var n=+this.dataset.fb+1;this.dataset.fb=n;'
-            f'var d=this.dataset.domain;'
-            f'if(n===1){{this.src=\'https://www.google.com/s2/favicons?domain=\'+d+\'&sz=64\';}}'
-            f'else if(n===2){{this.src=\'https://icons.duckduckgo.com/ip3/\'+d+\'.ico\';}}'
-            f'else{{this.style.display=\'none\';}}">'
+            f'src="../logos/{html.escape(domain)}.png" '
+            f'onerror="this.style.display=\'none\';">'
             if domain else ""
         )
         tds = [
@@ -1713,20 +1789,15 @@ _HTML_TEMPLATE = """<!doctype html>
     // ticker -> 公司主页域名，用于 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {logo_map_json};
     // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
-    // 主源 cccyun（国内可访问的 Google favicon 代理）；失败依次切到 Google s2 →
-    // DuckDuckGo → 隐藏。中国大陆读者第一源即可命中；境外读者遇到 cccyun 403
-    // 时会自动升级到境外源，图标质量不降。
+    // 图标从本地缓存目录 ../logos/<domain>.png 加载（脚本运行时已抓取到 Pages/logos/,
+    // 随 commit 一同上传）; 不依赖任何第三方 favicon 服务, 国内外都能秒开。
+    // png 缺失时 onerror 静默隐藏 <img>, 不影响 ticker 文字部分。
     function logoImg(t) {{
       const d = LOGO_DOMAIN[t];
       if (!d) return '';
-      const onerr = "var n=+this.dataset.fb+1;this.dataset.fb=n;"
-                  + "var d=this.dataset.domain;"
-                  + "if(n===1){{this.src='https://www.google.com/s2/favicons?domain='+d+'&sz=64';}}"
-                  + "else if(n===2){{this.src='https://icons.duckduckgo.com/ip3/'+d+'.ico';}}"
-                  + "else{{this.style.display='none';}}";
-      return `<img class="tk-logo" alt="" loading="lazy" data-domain="${{d}}" data-fb="0" `
-           + `src="https://favicon.cccyun.cc/${{d}}" `
-           + `onerror="${{onerr}}">`;
+      return `<img class="tk-logo" alt="" loading="lazy" `
+           + `src="../logos/${{d}}.png" `
+           + `onerror="this.style.display='none';">`;
     }}
 
     // 每个 ticker 的当前快照（close/shares/debt/cash/ebit/pe/currency）
@@ -1847,8 +1918,9 @@ _HTML_TEMPLATE = """<!doctype html>
           notes.push(
             `<span class="cf-tag">COMPUTED</span>` +
             `<b>1Y 周频为本地反算</b>（仅个股: ${{stockSelected.join(', ')}}），非站点直接提供。` +
-            `采用史周收盘价 + 今日 statistics 快照（EPS<sub>TTM</sub>、EBIT<sub>TTM</sub>、股本、总债务、现金）。` +
-            `历史基本面实际随时间变化，因此早期点会存在偏差，仅供参考。<br/>` +
+            `EPS<sub>TTM</sub> / EBIT<sub>TTM</sub> 采用<b>当周所属季的滚动 4 季 TTM</b>（历史值，无未来函数）；` +
+            `股本 / 总债务 / 现金采用<b>今日 statistics 快照</b>（该页无历史序列）。` +
+            `因此 <b>P/E 曲线不受资本结构变化影响</b>，而 <b>EV/EBIT 早期点</b>会因股本 / 债务 / 现金随时间变化而存在偏差，仅供参考。<br/>` +
             `<code>${{FORMULA_HTML[currentMetric]}}</code>`
           );
         }}
@@ -2355,7 +2427,10 @@ def _sync_pages(report_path: str) -> None:
       2. 用正则重写 ``Pages/index.html`` 中三处对 report 的引用
          （meta refresh、canonical link、可见备用链接），指向最新那份。
       3. 确保存在空文件 ``Pages/.nojekyll`` （阻止 Pages 用 Jekyll 处理）。
-      4. 把最新那份 HTML 额外复制一份为 ``Pages/latest.html`` （覆盖式）。
+      4. 把最新那份 HTML 额外复制一份为 ``Pages/latest.html`` （覆盖式），
+         同时把 HTML 内的 ``../logos/`` 引用改写为 ``logos/`` ——因为年份子目录
+         下的报告用 ``../logos/`` 引用 ``Pages/logos/`` (相对上跳一级)，而
+         latest.html 位于 Pages/ 根下需要同级 ``logos/``。
          用途: 供 CI 上的 Playwright 用固定路径截图, 输出 ``Pages/latest.png``,
          再由 README.md 以相对路径 ``Pages/latest.png`` 引用。
 
@@ -2421,17 +2496,31 @@ def _sync_pages(report_path: str) -> None:
         open(nojekyll, "w", encoding="utf-8").close()
 
     # 5) 复制当日 HTML 为 Pages/latest.html （覆盖式），供 CI 截图使用
-    # 用 shutil.copy2 保留 mtime, 便于本地对比 "latest 是否是最新那份"。
     # report_path 位于 Pages/<YYYY>/ValuationSnapshot-YYYYMMDD.html;
-    # 目标固定在 Pages/latest.html, 因此需要覆盖同名文件。
+    # 目标固定在 Pages/latest.html, 因此需要覆盖同名文件, 并且要把 HTML 内所有对
+    # ``../logos/`` 的引用改写为 ``logos/`` —— 因为年份子目录里的报告需要 ``../logos/``
+    # 才能跳到 Pages/logos/, 而 latest.html 在 Pages/ 根下, 应该用 ``logos/`` 同级引用。
     latest_path = os.path.join(pages_dir, "latest.html")
     try:
-        shutil.copy2(report_path, latest_path)
+        with open(report_path, "r", encoding="utf-8") as f:
+            latest_html = f.read()
+        # 只替换紧跟在 src=" / href=" 之后的 ../logos/ 前缀, 避免误伤注释里的文字
+        latest_html = latest_html.replace('src="../logos/', 'src="logos/')
+        with open(latest_path, "w", encoding="utf-8") as f:
+            f.write(latest_html)
     except OSError as e:
         print(f"  !! failed to refresh latest.html: {e}", file=sys.stderr)
 
 
 def main() -> int:
+    # 先建 Pages 目录并抓取 favicon 缓存 (仅缺失的域名会联网抓; 已缓存的直接跳过)。
+    # 抓取放在 fetch stocks 之前, 是因为 stockanalysis.com 请求耗时几十秒, 提前做 logo
+    # 缓存不会显著拉长总时间, 而且失败也不阻塞后续流程。
+    import os
+    pages_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pages")
+    os.makedirs(pages_dir, exist_ok=True)
+    ensure_logo_cache(os.path.join(pages_dir, "logos"))
+
     etf_rows = _fetch_list(ETFs, "ETF")
     us_rows = _fetch_list(USStocks, "US")
     hk_rows = _fetch_list(HKStocks, "HK")
@@ -2450,8 +2539,6 @@ def main() -> int:
     # （数据用的是前日收盘价，同一天多次运行会覆盖同一份文件）
     # 所有产物按"年份分目录"归档到 Pages/<YYYY>/ 下, 便于 10 年后按年裁剪 / 打包 / 走 LFS.
     # index.html 依然位于 Pages/ 根目录, meta refresh 指向 <YYYY>/ValuationSnapshot-YYYYMMDD.html
-    import os
-    pages_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pages")
     year_dir = os.path.join(pages_dir, now.strftime("%Y"))
     os.makedirs(year_dir, exist_ok=True)
     out_path = os.path.join(year_dir, f"ValuationSnapshot-{now.strftime('%Y%m%d')}.html")

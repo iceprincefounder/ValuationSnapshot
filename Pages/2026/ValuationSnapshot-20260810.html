@@ -647,8 +647,9 @@
           notes.push(
             `<span class="cf-tag">COMPUTED</span>` +
             `<b>1Y 周频为本地反算</b>（仅个股: ${stockSelected.join(', ')}），非站点直接提供。` +
-            `采用史周收盘价 + 今日 statistics 快照（EPS<sub>TTM</sub>、EBIT<sub>TTM</sub>、股本、总债务、现金）。` +
-            `历史基本面实际随时间变化，因此早期点会存在偏差，仅供参考。<br/>` +
+            `EPS<sub>TTM</sub> / EBIT<sub>TTM</sub> 采用<b>当周所属季的滚动 4 季 TTM</b>（历史值，无未来函数）；` +
+            `股本 / 总债务 / 现金采用<b>今日 statistics 快照</b>（该页无历史序列）。` +
+            `因此 <b>P/E 曲线不受资本结构变化影响</b>，而 <b>EV/EBIT 早期点</b>会因股本 / 债务 / 现金随时间变化而存在偏差，仅供参考。<br/>` +
             `<code>${FORMULA_HTML[currentMetric]}</code>`
           );
         }
