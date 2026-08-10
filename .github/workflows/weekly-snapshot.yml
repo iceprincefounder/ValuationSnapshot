@@ -8,6 +8,8 @@
 # 行为:
 #   - checkout -> 直接 `python ValuationSnapshot.py` (脚本只用标准库, 无需 pip)
 #   - 脚本对所有外部数据源都是软失败: 反爬/超时 -> 对应字段留空, 不影响退出码
+#   - 装 Playwright + Chromium, 跑 .github/scripts/screenshot.py 把 Pages/latest.html
+#     截成 Pages/latest.png (供 README.md 引用, 让访客在 GitHub 首页看到全貌)
 #   - 如果 Pages/ 有变化, 用 github-actions[bot] 身份 commit + push 回 main
 #   - 同一个 job 内直接调用官方 Pages action 完成部署
 #     (避开 "GITHUB_TOKEN 推的 commit 不会触发另一个 workflow" 的坑)
@@ -54,6 +56,21 @@ jobs:
         env:
           BROWSER: echo
         run: python ValuationSnapshot.py
+
+      - name: Install Playwright (for screenshot)
+        # Playwright 只在 CI 用 (本地纯标准库跑仍然 OK)。--with-deps 让它自动装
+        # Chromium 需要的系统级共享库, 免得手动 apt install。首次 ~1min, 之后
+        # 由 pip / apt 缓存加速。
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Render latest.png
+        # 把 Pages/latest.html 截成 Pages/latest.png (README.md 引用它);
+        # 若截图失败, 只打警告, 不让整个 workflow fail (数据 HTML 已经生成成功)。
+        continue-on-error: true
+        run: python .github/scripts/screenshot.py
 
       - name: Commit updated Pages
         # 只有 Pages/ 真的变了才提交, 免得留一堆空 commit。

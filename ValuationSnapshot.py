@@ -111,10 +111,11 @@ ETF_FWD_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
 }
 
 # ---------- 公司 logo 域名映射 ----------
-# 通过 Google s2 favicon 服务动态加载:
-#   https://www.google.com/s2/favicons?domain=<domain>&sz=64
-# 无 API key、免费、CDN 极快; 前端如果 Google 未收录, 会自动回退到 DuckDuckGo
-# icon 服务 (https://icons.duckduckgo.com/ip3/<domain>.ico), 两者都失败才隐藏。
+# 前端 <img> 主源使用国内可访问的 favicon 代理:
+#   https://favicon.cccyun.cc/<domain>
+# 失败时按序回退到 Google s2 (https://www.google.com/s2/favicons?domain=<d>&sz=64) →
+# DuckDuckGo (https://icons.duckduckgo.com/ip3/<d>.ico) → 隐藏。
+# 中国大陆读者靠 cccyun 命中；境外读者靠 Google/DDG 兜底，两边都能看到图标。
 LOGO_DOMAIN: dict[str, str] = {
     # US
     "AAPL":  "apple.com",
@@ -1203,13 +1204,17 @@ def render_section_html(title: str, rows: list[Row], currency: str) -> str:
     body_rows: list[str] = []
     for r in rows:
         domain = LOGO_DOMAIN.get(r.symbol, "")
-        # 主源 Google favicon; onerror 时先切到 DuckDuckGo, 再失败才彻底隐藏
+        # 主源使用国内可访问的 cccyun（Google favicon 代理），onerror 依次回退到
+        # Google s2 → DuckDuckGo → 隐藏。国内读者第一源即命中；境外读者若 cccyun
+        # 拒答（生僻域名 403），会自动升级到 Google/DDG。
         logo_html = (
             f'<img class="tk-logo" alt="" loading="lazy" '
-            f'data-domain="{html.escape(domain)}" '
-            f'src="https://www.google.com/s2/favicons?domain={html.escape(domain)}&sz=64" '
-            f'onerror="if(!this.dataset.fb){{this.dataset.fb=1;'
-            f'this.src=\'https://icons.duckduckgo.com/ip3/\'+this.dataset.domain+\'.ico\';}}'
+            f'data-domain="{html.escape(domain)}" data-fb="0" '
+            f'src="https://favicon.cccyun.cc/{html.escape(domain)}" '
+            f'onerror="var n=+this.dataset.fb+1;this.dataset.fb=n;'
+            f'var d=this.dataset.domain;'
+            f'if(n===1){{this.src=\'https://www.google.com/s2/favicons?domain=\'+d+\'&sz=64\';}}'
+            f'else if(n===2){{this.src=\'https://icons.duckduckgo.com/ip3/\'+d+\'.ico\';}}'
             f'else{{this.style.display=\'none\';}}">'
             if domain else ""
         )
@@ -1256,6 +1261,13 @@ _HTML_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Valuation Snapshot</title>
 {favicon_link}
+<!--
+  vs-data: machine-readable data contract for future historical extractors.
+  Schema is versioned via data-schema attribute; the presence & id are stable across
+  script refactors. Consumers should look up `<script id="vs-data">` and json.loads()
+  its text content. See README for field definitions.
+-->
+<script type="application/json" id="vs-data" data-schema="1">{vs_data_json}</script>
 <style>
   :root {{
     --bg: #0b1020;
@@ -1698,18 +1710,22 @@ _HTML_TEMPLATE = """<!doctype html>
     // ticker -> Forward P/E (P/E Fwd 列) 的数据源标签（仅 ETF 有值, 例 SSGA/Invesco）。
     // 页面加载后会给对应 ticker 行的 "P/E (Fwd)" 单元格追加 title tooltip, 悬停可见出处。
     const FWD_SOURCE = {fwd_source_json};
-    // ticker -> 公司主页域名，用于 Google s2 favicon 图标；缺失的 ticker 不显示 logo
+    // ticker -> 公司主页域名，用于 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {logo_map_json};
     // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
-    // 主源 Google s2 favicon; 失败则切换到 DuckDuckGo icon 服务; 两者都失败才隐藏
+    // 主源 cccyun（国内可访问的 Google favicon 代理）；失败依次切到 Google s2 →
+    // DuckDuckGo → 隐藏。中国大陆读者第一源即可命中；境外读者遇到 cccyun 403
+    // 时会自动升级到境外源，图标质量不降。
     function logoImg(t) {{
       const d = LOGO_DOMAIN[t];
       if (!d) return '';
-      const onerr = "if(!this.dataset.fb){{this.dataset.fb=1;"
-                  + "this.src='https://icons.duckduckgo.com/ip3/'+this.dataset.domain+'.ico';}}"
+      const onerr = "var n=+this.dataset.fb+1;this.dataset.fb=n;"
+                  + "var d=this.dataset.domain;"
+                  + "if(n===1){{this.src='https://www.google.com/s2/favicons?domain='+d+'&sz=64';}}"
+                  + "else if(n===2){{this.src='https://icons.duckduckgo.com/ip3/'+d+'.ico';}}"
                   + "else{{this.style.display='none';}}";
-      return `<img class="tk-logo" alt="" loading="lazy" data-domain="${{d}}" `
-           + `src="https://www.google.com/s2/favicons?domain=${{d}}&sz=64" `
+      return `<img class="tk-logo" alt="" loading="lazy" data-domain="${{d}}" data-fb="0" `
+           + `src="https://favicon.cccyun.cc/${{d}}" `
            + `onerror="${{onerr}}">`;
     }}
 
@@ -2121,7 +2137,7 @@ _HTML_TEMPLATE = """<!doctype html>
           let fwdIdx = -1;
           ths.forEach((th, i) => {{
             // 表头是 "P/E&nbsp;(Fwd)" -> textContent 变成 "P/E (Fwd)"
-            const txt = (th.textContent || '').replace(/\s+/g, ' ').trim();
+            const txt = (th.textContent || '').replace(/\\s+/g, ' ').trim();
             if (txt === 'P/E (Fwd)') fwdIdx = i;
           }});
           if (fwdIdx < 0) return;
@@ -2241,6 +2257,67 @@ def build_html_report(
             }
     snapshot_json = json.dumps(snapshot, ensure_ascii=False)
 
+    # -------- 稳定的数据契约块 (vs-data / schema v1) --------
+    # 目的: 让未来任意时间点写的爬虫都能从 Pages/ 里 520 份历史 HTML 中稳定抽出结构化数据,
+    # 不受脚本内部实现 (变量名/字段名/前端渲染方式) 演进影响。
+    #
+    # 契约要点:
+    #   - 位置固定: <script type="application/json" id="vs-data" data-schema="N">
+    #   - 版本演进: 字段增删只允许"追加"; 若必须删/改, 请升 data-schema 版本并保留旧解析路径
+    #   - 字段周全: 涵盖当前表格所有列 + 历史曲线 + 数据源标签, 一份文件就是一份完整周度快照
+    tickers_data: dict[str, dict] = {}
+    for _title, rows, cur in sections:
+        for r in rows:
+            close   = _to_float(r.data.get(CLOSE_COL))
+            snap_pe = _to_float(r.data.get(FIELDS["pe"]))
+            fwd_pe  = _to_float(r.data.get(FIELDS["peForward"]))
+            ev_ebit = _to_float(r.data.get(FIELDS["evEbit"]))
+            ev_ebitda = _to_float(r.data.get(FIELDS["evEbitda"]))
+            peg     = _to_float(r.data.get(FIELDS["pegRatio"]))
+            ebit    = _to_float(r.data.get(FIELDS["ebit"]))
+            debt    = _to_float(r.data.get(FIELDS["debt"]))
+            cash    = _to_float(r.data.get(FIELDS["totalcash"]))
+            mcap    = _to_float(r.data.get(FIELDS["marketcap"]))
+            evv     = _to_float(r.data.get(FIELDS["enterpriseValue"]))
+            shares  = (mcap / close) if (mcap and close) else None
+            tickers_data[r.symbol] = {
+                "section": _title,
+                "currency": cur,
+                "close": close,
+                "close_date": r.data.get(CLOSE_DATE_COL),
+                "pe": snap_pe,
+                "pe_forward": fwd_pe,
+                "ev_ebit": ev_ebit,
+                "ev_ebitda": ev_ebitda,
+                "peg": peg,
+                "ebit_ttm": ebit,
+                "debt": debt,
+                "cash": cash,
+                "market_cap": mcap,
+                "enterprise_value": evv,
+                "shares_out": shares,
+                "pe_history_source": r.pe_history_source,
+                "pe_forward_source": r.pe_forward_source,
+                # 曲线保留 5Y 全量 (3Y/1Y 都是它的尾部切片, 冗余不必存);
+                # 每点是 [date_str, value]
+                "pe_history_5y": (
+                    [[d, v] for d, v in r.pe_history] if r.pe_history else []
+                ),
+                "ev_ebit_history_5y": (
+                    [[d, v] for d, v in r.ev_ebit_history] if r.ev_ebit_history else []
+                ),
+            }
+    vs_data = {
+        "schema": 1,
+        "date": ts.strftime("%Y-%m-%d"),
+        "generated_at": ts.strftime("%Y-%m-%d %H:%M:%S"),
+        "tickers": tickers_data,
+    }
+    vs_data_json = json.dumps(vs_data, ensure_ascii=False, separators=(",", ":"))
+    # 安全: 避免 JSON 里意外出现 "</script>" 类字符串导致 HTML 解析器提前关闭 <script>
+    # (这里我们的字段都是数字/短标签, 实际不会命中, 但仍做一次防御性转义)
+    vs_data_json = vs_data_json.replace("</", "<\\/")
+
     return _HTML_TEMPLATE.format(
         sections=body,
         generated_at=ts.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2255,6 +2332,7 @@ def build_html_report(
         logo_map_json=logo_map_json,
         snapshot_json=snapshot_json,
         favicon_link=_favicon_link_tag(),
+        vs_data_json=vs_data_json,
     )
 
 
@@ -2277,10 +2355,15 @@ def _sync_pages(report_path: str) -> None:
       2. 用正则重写 ``Pages/index.html`` 中三处对 report 的引用
          （meta refresh、canonical link、可见备用链接），指向最新那份。
       3. 确保存在空文件 ``Pages/.nojekyll`` （阻止 Pages 用 Jekyll 处理）。
+      4. 把最新那份 HTML 额外复制一份为 ``Pages/latest.html`` （覆盖式）。
+         用途: 供 CI 上的 Playwright 用固定路径截图, 输出 ``Pages/latest.png``,
+         再由 README.md 以相对路径 ``Pages/latest.png`` 引用。
 
     设计取舍：
       - Pages/index.html 若不存在则跳过重写（首次使用者应先手工放好模板）。
       - 历史 report 保留在 Pages/ 里不清理，旧链接依然可达。
+      - latest.html 是"当日快照的浅拷贝"，不是重定向页, 因为无头浏览器截图时
+        需要真正渲染出内容, meta refresh 页面会截到空壳。
     """
     import os, re, shutil
 
@@ -2290,7 +2373,9 @@ def _sync_pages(report_path: str) -> None:
     if not os.path.isdir(pages_dir):
         return
 
-    report_name = os.path.basename(report_path)
+    # report_ref: 供 index.html 引用的相对路径, 形如 "2026/ValuationSnapshot-20260810.html"
+    # 兼容老布局: 如果 report_path 就在 pages_dir 根下, 结果退化为纯文件名 basename.
+    report_ref = os.path.relpath(report_path, pages_dir).replace(os.sep, "/")
 
     # 1) 复制 favicon（每次覆盖，保持同步）
     # png 可能放在主目录（老布局），也可能已经躺在 Pages/ 里（新布局）；后者情形
@@ -2309,30 +2394,41 @@ def _sync_pages(report_path: str) -> None:
         # meta refresh: content="0; url=XXX.html"
         txt = re.sub(
             r'(<meta\s+http-equiv="refresh"[^>]*url=)[^"\s>]+',
-            lambda m: m.group(1) + report_name,
+            lambda m: m.group(1) + report_ref,
             txt,
         )
         # <link rel="canonical" href="XXX.html" />
         txt = re.sub(
             r'(<link\s+rel="canonical"\s+href=")[^"]+(")',
-            lambda m: m.group(1) + report_name + m.group(2),
+            lambda m: m.group(1) + report_ref + m.group(2),
             txt,
         )
-        # <a href="XXX.html">XXX.html</a>  （既改 href 又改可见文本）
+        # <a href="[YYYY/]XXX.html">[YYYY/]XXX.html</a>  （既改 href 又改可见文本）
+        # 兼容老布局 (裸文件名) 与新布局 (带年份前缀)。
         txt = re.sub(
-            r'(<a\s+href=")ValuationSnapshot-\d{8}\.html(">)ValuationSnapshot-\d{8}\.html(</a>)',
-            lambda m: m.group(1) + report_name + m.group(2) + report_name + m.group(3),
+            r'(<a\s+href=")(?:\d{4}/)?ValuationSnapshot-\d{8}\.html(">)(?:\d{4}/)?ValuationSnapshot-\d{8}\.html(</a>)',
+            lambda m: m.group(1) + report_ref + m.group(2) + report_ref + m.group(3),
             txt,
         )
         if txt != orig:
             with open(index_path, "w", encoding="utf-8") as f:
                 f.write(txt)
-            print(f"> Pages: index.html -> {report_name}", file=sys.stderr)
+            print(f"> Pages: index.html -> {report_ref}", file=sys.stderr)
 
     # 4) .nojekyll
     nojekyll = os.path.join(pages_dir, ".nojekyll")
     if not os.path.exists(nojekyll):
         open(nojekyll, "w", encoding="utf-8").close()
+
+    # 5) 复制当日 HTML 为 Pages/latest.html （覆盖式），供 CI 截图使用
+    # 用 shutil.copy2 保留 mtime, 便于本地对比 "latest 是否是最新那份"。
+    # report_path 位于 Pages/<YYYY>/ValuationSnapshot-YYYYMMDD.html;
+    # 目标固定在 Pages/latest.html, 因此需要覆盖同名文件。
+    latest_path = os.path.join(pages_dir, "latest.html")
+    try:
+        shutil.copy2(report_path, latest_path)
+    except OSError as e:
+        print(f"  !! failed to refresh latest.html: {e}", file=sys.stderr)
 
 
 def main() -> int:
@@ -2350,13 +2446,15 @@ def main() -> int:
         generated_at=now,
     )
 
-    # 文件名安全的时间戳（本地时间），只保留到天，例：Pages/ValuationSnapshot-20260807.html
+    # 文件名安全的时间戳（本地时间），只保留到天，例：Pages/2026/ValuationSnapshot-20260807.html
     # （数据用的是前日收盘价，同一天多次运行会覆盖同一份文件）
-    # 所有产物统一放到 Pages/ 下，方便直接作为 GitHub Pages 部署源
+    # 所有产物按"年份分目录"归档到 Pages/<YYYY>/ 下, 便于 10 年后按年裁剪 / 打包 / 走 LFS.
+    # index.html 依然位于 Pages/ 根目录, meta refresh 指向 <YYYY>/ValuationSnapshot-YYYYMMDD.html
     import os
     pages_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pages")
-    os.makedirs(pages_dir, exist_ok=True)
-    out_path = os.path.join(pages_dir, f"ValuationSnapshot-{now.strftime('%Y%m%d')}.html")
+    year_dir = os.path.join(pages_dir, now.strftime("%Y"))
+    os.makedirs(year_dir, exist_ok=True)
+    out_path = os.path.join(year_dir, f"ValuationSnapshot-{now.strftime('%Y%m%d')}.html")
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html_doc)
