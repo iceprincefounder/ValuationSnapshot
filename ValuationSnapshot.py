@@ -763,7 +763,8 @@ def _fetch_etf(ticker: str) -> Row:
         row[FIELDS["marketcap"]] = aum_raw.lstrip("$").strip() or aum_raw
 
     # -------- 指数代理: 历史 P/E 时序 --------
-    # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个季末点 (NDX 免费版), 3Y = 5Y 尾部切片。
+    # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个季末点 (NDX 免费版), 3Y = 5Y 尾部切片，
+    # 1Y = 5Y 数组的更小尾部切片（月度 12 点 / 季度 4 点）。
     # VUG 追踪 CRSP US LC Growth, 无公开源 -> 保持 None, 前端不显示曲线。
     src = ETF_PE_SOURCE.get(ticker.upper())
     if src is not None:
@@ -776,13 +777,55 @@ def _fetch_etf(ticker: str) -> Row:
             elif parser_name == "siblis_ndx":
                 pe_hist = parse_siblis_ndx_pe(idx_html, limit=60)
         if pe_hist:
+            # 无论 1Y/3Y/5Y, 数组最右端都应当反映"当前 TTM"快照（与股票分支一致）:
+            #   - 中间历史点保留数据源的日期 + 数值 (月度 SPX 或 季度 NDX)
+            #   - 最右端根据"数据源最新点距今天数"分两种做法, 避免日期显得过时:
+            #     * 距今 <= STALE_DAYS: 数据源点已经足够新, 直接把它的日期改成今天 + 值改成 snap
+            #       (SPYM: multpl 每天都会更新一个"今日"点, 差 ~1 天; QQQM 6/30 之后到 9/30 之前无更新时不适用)
+            #     * 距今  > STALE_DAYS: 数据源点太老, 保留原点作为"历史点"不动,
+            #       在末尾追加一个日期=今天 / 值=snap 的新点。曲线尾段会拉出一条直线,
+            #       诚实反映"数据源空档期"(QQQM 常态: 6/30 -> today 追加一个点)。
+            #   snap_pe 来自 stockanalysis ETF 主页 (etf.peRatio, ETF 组合当日加权 P/E),
+            #   保证 1Y/3Y/5Y 三条曲线的最右点都 = 表格里 P/E 列的当前值。
+            snap_pe = _to_float(pe_raw) if pe_raw is not None else None
+            if snap_pe is not None:
+                STALE_DAYS = 20  # 阈值: 数据源末点距今超过 20 天视为"陈旧"
+                today_iso = dt.date.today().isoformat()
+                last_date_str, _last_val = pe_hist[-1]
+                try:
+                    last_date = dt.date.fromisoformat(last_date_str)
+                    gap_days = (dt.date.today() - last_date).days
+                except ValueError:
+                    gap_days = 0  # 解析失败按"新鲜"处理, 沿用原日期
+                appended_snap = False
+                if gap_days > STALE_DAYS:
+                    # 追加"今日快照点", 中间的数据源末点保留原值不动
+                    pe_hist.append((today_iso, snap_pe))
+                    appended_snap = True
+                else:
+                    # 数据源末点够新, 直接把它替换成"今日快照点"
+                    pe_hist[-1] = (today_iso, snap_pe)
+            else:
+                appended_snap = False
+
             r = Row(ticker, row)
             r.pe_history = pe_hist
-            # 3Y 尾部切片: 月度取 36 点, 季度取 12 点; 数据不足时取全部
+            # 3Y / 1Y 尾部切片: 数据源频率 × 时间跨度 = 应有的季末/月末点数。
+            # 若走了"追加分支"(appended_snap=True), 说明末点是"今日快照"而非季末/月末,
+            # 应额外多取 1 点, 保证时间跨度真的覆盖过去 3Y / 1Y。
+            # 例: QQQM 1Y = 4 个季末 (含最近 6/30) + 1 个 today 快照 = 5 个点。
+            #     SPYM 走"覆盖分支", 12 个月度点里最后一个已经是 today, 无需+1。
+            extra = 1 if appended_snap else 0
             if parser_name == "multpl_spx":
-                r.pe_history_3y = pe_hist[-36:] if len(pe_hist) > 36 else list(pe_hist)
+                take_3y = 36 + extra
+                take_1y = 12 + extra
+                r.pe_history_3y = pe_hist[-take_3y:] if len(pe_hist) > take_3y else list(pe_hist)
+                r.pe_history_1y = pe_hist[-take_1y:] if len(pe_hist) > take_1y else list(pe_hist)
             else:
-                r.pe_history_3y = pe_hist[-12:] if len(pe_hist) > 12 else list(pe_hist)
+                take_3y = 12 + extra
+                take_1y = 4  + extra
+                r.pe_history_3y = pe_hist[-take_3y:] if len(pe_hist) > take_3y else list(pe_hist)
+                r.pe_history_1y = pe_hist[-take_1y:] if len(pe_hist) > take_1y else list(pe_hist)
             r.pe_history_source = label
             return r
         else:
@@ -1643,10 +1686,18 @@ _HTML_TEMPLATE = """<!doctype html>
 
         // 说明条：合并两类提示——1Y 本地反算公式 + ETF 指数代理 / EV/EBIT N/A 提醒
         const notes = [];
-        if (rmeta.computed) {{
+        // "本地反算"提示只对个股 1Y 成立（ETF 的 1Y 来自 multpl/siblis 指数源, 不是本地反算）。
+        // 判定为个股：既不是指数代理（PE_SOURCE 值不含 'Index'）, 且 snapshot 里有 EBIT。
+        const stockSelected = Array.from(selected.keys()).filter(t => {{
+          const src = PE_SOURCE[t];
+          const snap = SNAPSHOT[t];
+          const isIndexProxy = src && src.indexOf('Index') >= 0;
+          return !isIndexProxy && snap && snap.ebit;
+        }});
+        if (rmeta.computed && stockSelected.length > 0) {{
           notes.push(
             `<span class="cf-tag">COMPUTED</span>` +
-            `<b>1Y 周频为本地反算</b>，非站点直接提供。` +
+            `<b>1Y 周频为本地反算</b>（仅个股: ${{stockSelected.join(', ')}}），非站点直接提供。` +
             `采用史周收盘价 + 今日 statistics 快照（EPS<sub>TTM</sub>、EBIT<sub>TTM</sub>、股本、总债务、现金）。` +
             `历史基本面实际随时间变化，因此早期点会存在偏差，仅供参考。<br/>` +
             `<code>${{FORMULA_HTML[currentMetric]}}</code>`
@@ -1655,11 +1706,18 @@ _HTML_TEMPLATE = """<!doctype html>
         // 选中的 ETF 用的是指数代理 P/E，明确告知用户
         const etfSelected = Array.from(selected.keys()).filter(t => PE_SOURCE[t] && PE_SOURCE[t].indexOf('Index') >= 0);
         if (currentMetric === 'pe' && etfSelected.length > 0) {{
+          // 1Y 情形补一句频率说明：SPYM 是月度点、QQQM 是季度点，都不是"周频"
+          const rangeNote = (currentRange === '1y')
+            ? `1Y 视图下点位仍为数据源原生频率（月度 / 季度），非本地反算的周频。`
+            : ``;
           notes.push(
             `<span class="cf-tag">INDEX PROXY</span>` +
             `<b>${{etfSelected.join(', ')}}</b> 展示的是所追踪指数的历史 P/E（TTM），` +
             `并非 ETF 组合本身的加权 P/E——ETF 组合层面没有公开的历史 P/E 时序，` +
-            `因此退而求其次以指数估值作为代理。当前快照的 P/E 仍是 ETF 组合值。`
+            `因此退而求其次以指数估值作为代理。` +
+            `曲线最右端已用 stockanalysis ETF 主页的当前 TTM 快照覆盖数值，` +
+            `以保证 1Y / 3Y / 5Y 最新点与表格里的 P/E 完全一致。` +
+            (rangeNote ? `<br/>${{rangeNote}}` : ``)
           );
         }}
         // 选中的 ETF 但当前 metric 是 EV/EBIT：ETF 语义上不适用
@@ -1927,19 +1985,26 @@ _HTML_TEMPLATE = """<!doctype html>
 
 
 def _favicon_link_tag() -> str:
-    """读取脚本同目录下的 ValuationSnapshot-Icon.png, 编码为 data URI 作为 favicon.
+    """读取 icon.png, 编码为 data URI 作为 favicon.
 
     使用 data URI 而非相对路径, 让生成的 HTML 可独立分发 (无需附带 png).
-    如果 png 不存在或读取失败, 返回空串, 浏览器会退回到默认无图标行为.
+    查找顺序: 脚本同目录 -> Pages/ 子目录 (兼容"资产只放 GitHub Pages 部署源"的布局).
+    如果 png 都不存在或读取失败, 返回空串, 浏览器会退回到默认无图标行为.
     """
     import base64, os
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ValuationSnapshot-Icon.png")
-    try:
-        with open(icon_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
-        return f'<link rel="icon" type="image/png" href="data:image/png;base64,{b64}" />'
-    except OSError:
-        return ""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "icon.png"),
+        os.path.join(here, "Pages", "icon.png"),
+    ]
+    for icon_path in candidates:
+        try:
+            with open(icon_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            return f'<link rel="icon" type="image/png" href="data:image/png;base64,{b64}" />'
+        except OSError:
+            continue
+    return ""
 
 
 def build_html_report(
@@ -2039,6 +2104,71 @@ def _fetch_list(tickers: list[str], market: str) -> list[Row]:
     return rows
 
 
+def _sync_pages(report_path: str) -> None:
+    """HTML 已经直接写入 Pages/，这里只做"周边同步"：
+
+      1. 复制 favicon ``icon.png`` 到 ``Pages/`` （每次覆盖）。
+      2. 用正则重写 ``Pages/index.html`` 中三处对 report 的引用
+         （meta refresh、canonical link、可见备用链接），指向最新那份。
+      3. 确保存在空文件 ``Pages/.nojekyll`` （阻止 Pages 用 Jekyll 处理）。
+
+    设计取舍：
+      - Pages/index.html 若不存在则跳过重写（首次使用者应先手工放好模板）。
+      - 历史 report 保留在 Pages/ 里不清理，旧链接依然可达。
+    """
+    import os, re, shutil
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    pages_dir = os.path.join(here, "Pages")
+    # Pages 目录此时必然存在（主流程已 makedirs），保险起见再判一次
+    if not os.path.isdir(pages_dir):
+        return
+
+    report_name = os.path.basename(report_path)
+
+    # 1) 复制 favicon（每次覆盖，保持同步）
+    # png 可能放在主目录（老布局），也可能已经躺在 Pages/ 里（新布局）；后者情形
+    # 直接跳过复制即可（源和目标相同）。
+    fav_src = os.path.join(here, "icon.png")
+    fav_dst = os.path.join(pages_dir, "icon.png")
+    if os.path.exists(fav_src) and os.path.abspath(fav_src) != os.path.abspath(fav_dst):
+        shutil.copy2(fav_src, fav_dst)
+
+    # 2) 重写 index.html 里的 3 处引用
+    index_path = os.path.join(pages_dir, "index.html")
+    if os.path.exists(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
+            txt = f.read()
+        orig = txt
+        # meta refresh: content="0; url=XXX.html"
+        txt = re.sub(
+            r'(<meta\s+http-equiv="refresh"[^>]*url=)[^"\s>]+',
+            lambda m: m.group(1) + report_name,
+            txt,
+        )
+        # <link rel="canonical" href="XXX.html" />
+        txt = re.sub(
+            r'(<link\s+rel="canonical"\s+href=")[^"]+(")',
+            lambda m: m.group(1) + report_name + m.group(2),
+            txt,
+        )
+        # <a href="XXX.html">XXX.html</a>  （既改 href 又改可见文本）
+        txt = re.sub(
+            r'(<a\s+href=")ValuationSnapshot-\d{8}\.html(">)ValuationSnapshot-\d{8}\.html(</a>)',
+            lambda m: m.group(1) + report_name + m.group(2) + report_name + m.group(3),
+            txt,
+        )
+        if txt != orig:
+            with open(index_path, "w", encoding="utf-8") as f:
+                f.write(txt)
+            print(f"> Pages: index.html -> {report_name}", file=sys.stderr)
+
+    # 4) .nojekyll
+    nojekyll = os.path.join(pages_dir, ".nojekyll")
+    if not os.path.exists(nojekyll):
+        open(nojekyll, "w", encoding="utf-8").close()
+
+
 def main() -> int:
     etf_rows = _fetch_list(ETFs, "ETF")
     us_rows = _fetch_list(USStocks, "US")
@@ -2054,9 +2184,13 @@ def main() -> int:
         generated_at=now,
     )
 
-    # 文件名安全的时间戳（本地时间），只保留到天，例：ValuationSnapshot-20260807.html
+    # 文件名安全的时间戳（本地时间），只保留到天，例：Pages/ValuationSnapshot-20260807.html
     # （数据用的是前日收盘价，同一天多次运行会覆盖同一份文件）
-    out_path = f"ValuationSnapshot-{now.strftime('%Y%m%d')}.html"
+    # 所有产物统一放到 Pages/ 下，方便直接作为 GitHub Pages 部署源
+    import os
+    pages_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Pages")
+    os.makedirs(pages_dir, exist_ok=True)
+    out_path = os.path.join(pages_dir, f"ValuationSnapshot-{now.strftime('%Y%m%d')}.html")
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html_doc)
@@ -2065,9 +2199,15 @@ def main() -> int:
         print(f"  !! failed to write {out_path}: {e}", file=sys.stderr)
         return 1
 
+    # 刷新 Pages/ 里的 favicon 与 index.html
+    try:
+        _sync_pages(out_path)
+    except Exception as e:
+        print(f"  !! Pages sync failed: {e}", file=sys.stderr)
+
     # 尝试自动用默认浏览器打开（失败也不影响脚本成功退出）
     try:
-        import webbrowser, os
+        import webbrowser
         webbrowser.open("file://" + os.path.abspath(out_path))
     except Exception:
         pass
