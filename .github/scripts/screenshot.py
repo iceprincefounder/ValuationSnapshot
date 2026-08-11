@@ -9,8 +9,10 @@
     - 只截 ``Pages/latest.html``（由 ValuationSnapshot.py 每次跑完写入的当日
       快照浅拷贝）。避开截 ``Pages/index.html``：那是 meta refresh 重定向页,
       截出来是空壳卡片。
-    - viewport 宽度固定 1200px, 高度用 ``full_page=True`` 自动扩展成长图。
-      GitHub README 显示区域约 1000px, 1200 稍宽保证清晰度, 缩放后仍不失真。
+    - viewport 底线宽度 1600px, 若页面真实内容更宽则动态扩展到最多 3000px;
+      高度用 ``full_page=True`` 自动扩展成长图.
+      GitHub README 显示区约 1000px, 1600 给出足够的清晰度余量, 且能容下近期
+      DCF Tab 拓宽后的主表 + 侧栏; 缩放后仍不失真。
     - 用 ``networkidle`` 等 SVG 图表与 favicon 加载完；若 30s 内没静默, 退回
       到 ``load`` 事件即可, 因为主体内容其实是脚本注入的, DOMContentLoaded 后
       就已经渲染完毕, 剩下的只是各家 favicon CDN 的最后几个请求。
@@ -52,13 +54,23 @@ def main() -> int:
     file_url = src_html.as_uri()
     print(f">> rendering {file_url}", file=sys.stderr)
 
+    # 视口宽度取舍:
+    #   - GitHub README 显示区约 1000px, 但截图会被浏览器自动缩放, 所以给宽一点
+    #     可以提升清晰度. 之前 1200 在近期新增 DCF Tab (CAGR chips + tooltip 表格 +
+    #     header 里 1Y/3Y/5Y 切换徽标) 后, 主表右侧列会被横向裁掉一部分.
+    #   - 直接抬到 1600 作为"底线宽度", 再叠加下面的动态量取, 无论页面未来横向
+    #     怎么长, 都能完整入镜.
+    BASE_WIDTH = 1600
+    # 安全上限, 避免异常情况下截出巨图 (例如某个内联 SVG 意外拉宽):
+    MAX_WIDTH = 3000
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
             # deviceScaleFactor=2 让输出图片在 Retina 屏上更清晰; GitHub 会自动
             # 按 CSS 宽度缩放显示, 视觉密度更好, 代价是文件体积翻倍 (约 500KB-1MB).
             ctx = browser.new_context(
-                viewport={"width": 1200, "height": 800},
+                viewport={"width": BASE_WIDTH, "height": 900},
                 device_scale_factor=2,
             )
             page = ctx.new_page()
@@ -73,6 +85,35 @@ def main() -> int:
 
             # 额外给 800ms, 让 SVG 动画与 favicon 三级 fallback 稳定下来
             page.wait_for_timeout(800)
+
+            # 动态量取真实内容宽度, 若超过当前 viewport 则扩展视口再截, 避免
+            # 右侧被 clip. 这里同时取 documentElement / body 的多个属性, 因为
+            # 某些容器上的 overflow: hidden 会让 scrollWidth 失真, 多路取最大更稳.
+            real_width = page.evaluate(
+                """() => {
+                    const d = document.documentElement, b = document.body;
+                    return Math.max(
+                      d.scrollWidth,  d.offsetWidth,  d.clientWidth,
+                      b ? b.scrollWidth : 0, b ? b.offsetWidth : 0
+                    );
+                }"""
+            )
+            try:
+                real_width = int(real_width)
+            except Exception:
+                real_width = BASE_WIDTH
+
+            if real_width > BASE_WIDTH:
+                target = min(real_width, MAX_WIDTH)
+                print(
+                    f">> content width {real_width}px > viewport {BASE_WIDTH}px, "
+                    f"expanding viewport to {target}px",
+                    file=sys.stderr,
+                )
+                page.set_viewport_size({"width": target, "height": 900})
+                # 视口变化后给 SVG 重排一点时间 (图表宽度大多是 CSS 100%, 靠
+                # 容器宽度自适应, 需要一次布局回流)
+                page.wait_for_timeout(400)
 
             page.screenshot(path=str(dst_png), full_page=True)
         finally:

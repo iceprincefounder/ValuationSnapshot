@@ -138,6 +138,24 @@ ETF_FWD_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
     "VUG":  None,   # Vanguard characteristics endpoint 未开放加权前瞻 P/E
 }
 
+# ETF -> Vanguard characteristic API 数据源。Vanguard 官方前端 (investor.vanguard.com)
+# 唯一公布的组合层面口径, 只提供 TTM P/E + EPS growth + ROE (无 forward P/E)。
+# 这里独立于 ETF_FWD_PE_SOURCE 是因为 SSGA / Invesco 提供 forward, Vanguard 只有 TTM,
+# 分开管理可以避免语义混淆。key = ETF ticker (upper), value = (label, ticker_for_api)。
+ETF_VANGUARD_SOURCE: dict[str, tuple[str, str] | None] = {
+    "VUG":  ("Vanguard · Portfolio characteristics (Morningstar equity, monthly)",
+             "vug"),
+    # SPYM (SPDR S&P 500) 与 VOO (Vanguard S&P 500) 追踪同一指数 (S&P 500) 且均为
+    # 全复制策略, 成分股 + 权重差异 < 0.05%, 组合层面加权 ROE 数值应基本一致。
+    # SSGA 官方页面 (含 Fund + Index Characteristics 两个面板) 不发布 ROE 字段,
+    # 这里用 VOO 的 Vanguard characteristic API 数据作为代理回填 SPYM 的 ROE 列;
+    # 由回填逻辑保证仅在原字段为空时写入, 不会覆盖 SSGA 原生 EPS Growth (前瞻口径,
+    # 与 Vanguard 的 TTM 口径不同)。VUG 追踪 CRSP US Large-Cap Growth, 与任何
+    # S&P 500 ETF 都不同源, 保持独立。
+    "SPYM": ("Vanguard · VOO Portfolio characteristics (S&P 500 proxy)",
+             "voo"),
+}
+
 # ---------- 公司 logo 域名映射 ----------
 # 每个域名对应的 favicon 已在脚本运行时抓取并缓存到 ``Pages/logos/<domain>.png``,
 # 图标随 commit 一同上传到 GitHub Pages. 前端 <img> 直接引用相对路径:
@@ -172,6 +190,14 @@ LOGO_DOMAIN: dict[str, str] = {
 # ---------- 页面字段映射 ----------
 
 # stockanalysis.com 页面里的字段 id -> 我们要的列
+#
+# 说明:
+#   epsGrowth3To5Y / returnOnEquity 是 ETF 专用列 (个股不填):
+#     - SPYM: SSGA HTML 提供 "Est. 3-5 Year EPS Growth", 无 ROE
+#     - QQQM: Invesco API 提供 returnOnEquity, 无 EPS Growth
+#     - VUG : 两者皆无
+#   在 render_section_html 里 ETF section 只展示 [PE, PE Fwd, EPS Growth, ROE] 四列,
+#   其它列 (MarketCap/EV/Debt/Cash/EBIT/EV·EBIT/EV·EBITDA/PEG) 对 ETF 语义上不成立, 直接不渲染。
 FIELDS = {
     "marketcap":         "MarketCap",
     "enterpriseValue":   "EV",
@@ -183,6 +209,8 @@ FIELDS = {
     "pe":                "PE",
     "peForward":         "PE Fwd",
     "pegRatio":          "PEG",
+    "epsGrowth3To5Y":    "EPS Growth (3-5Y Est)",
+    "returnOnEquity":    "ROE",
 }
 
 # 独立于 FIELDS 的"收盘价"与"时间"列
@@ -211,6 +239,15 @@ class Row:
     # 该 ticker 的 Forward P/E 数据源署名（仅 ETF 使用, 显示在表格 P/E (Fwd) 单元格 tooltip 里；
     # 个股由 stockanalysis statistics 页直接给出, 不额外标注, 保持 None）
     pe_forward_source: str | None = None
+    # 以下三项是"表格单元格级"的数据源署名, 用于给对应列的 <td> 添加 title tooltip。
+    # 与 pe_history_source (曲线数据源) / pe_forward_source (前瞻 PE 数据源) 平级独立:
+    #   - pe_ttm_source        : P/E (TTM) 单元格的数据源 (ETF 全部走 stockanalysis /etf/{t}/;
+    #                            个股由 stockanalysis /statistics/ 页直接给出, 通用标签)
+    #   - eps_growth_source    : EPS Growth (3-5Y Est) 单元格的数据源 (仅 ETF, 个股无此列)
+    #   - roe_source           : ROE 单元格的数据源 (仅 ETF, 个股无此列)
+    pe_ttm_source: str | None = None
+    eps_growth_source: str | None = None
+    roe_source: str | None = None
     # DCF Tab 使用的估值信息(仅个股, 快照生成时抓取; ETF 无组合层面 DCF 概念, 保持 None)。
     # 融合两个独立的公开数据源, 前端在 DCF Tab 里以并列双卡片形式展现, 且明确标注来源。
     # ------------------------------------------------------------------
@@ -628,14 +665,51 @@ def fetch_ssga_forward_pe(url: str) -> float | None:
     return v
 
 
-def fetch_invesco_forward_pe(cusip: str) -> float | None:
-    """通过 Invesco dng-api 拿 fundCharacteristics.forwardPriceToEarningsRatio。
+# SSGA HTML 里"Est. 3-5 Year EPS Growth"表格行, 与 FY1 P/E 完全同款结构:
+#   <th ... > Est. 3-5 Year EPS Growth <...> </th> <td class="data">18.43%</td>
+# 数值带 "%" 后缀, 抓取后剥掉再转 float.
+_PAT_SSGA_EPS_GROWTH = re.compile(
+    r'Est\.\s*3-5\s*Year\s+EPS\s+Growth.*?<td[^>]*class="data"[^>]*>\s*'
+    r'([\d.,\-]+)\s*%?\s*</td>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def fetch_ssga_eps_growth(url: str) -> float | None:
+    """抓 SSGA ETF 页面, 提取 Est. 3-5 Year EPS Growth (加权平均, FactSet Estimates)。
+
+    返回百分比数值 (例如 18.43 代表 18.43%)。抓取失败或数值不合理返回 None。
+    与 fetch_ssga_forward_pe 分开两次请求: 虽然可以复用同一份 HTML,
+    但 SSGA 站点 CDN 命中率高, 一次快照多 1 次请求 (~200ms) 影响可忽略,
+    保持函数职责单一便于失败排查。
+    """
+    html_str = _get(url)
+    if not html_str:
+        return None
+    m = _PAT_SSGA_EPS_GROWTH.search(html_str)
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    # sanity: 3-5Y EPS growth 通常 -20% ~ +50%, 超出视为解析异常
+    if v < -50 or v > 100:
+        return None
+    return v
+
+
+def fetch_invesco_fund_characteristics(cusip: str) -> dict[str, float] | None:
+    """通过 Invesco dng-api 拿 fundCharacteristics 全量字段。
 
     URL 模式:
       https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/{cusip}
         ?expand=nav&idType=cusip&variationType=fundCharacteristics&productType=ETF
 
-    返回加权 harmonic forward P/E, effectiveDate 通常滞后 1 个月末点。
+    返回 dict, 包含 (key 为 None 表示该项缺失或值不合理):
+      - forward_pe : forwardPriceToEarningsRatio (加权 harmonic forward P/E)
+      - roe        : returnOnEquity (百分比数值, 例如 34.79 表示 34.79%)
+    合并成一次请求, 避免同一 CUSIP 反复调用 3+ 次。
     """
     api = (
         f"https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/{cusip}"
@@ -658,12 +732,118 @@ def fetch_invesco_forward_pe(cusip: str) -> float | None:
     except Exception as e:
         print(f"  !! Invesco API parse failed: {e}", file=sys.stderr)
         return None
-    v = j.get("forwardPriceToEarningsRatio")
-    if not isinstance(v, (int, float)):
+
+    out: dict[str, float] = {}
+
+    fp = j.get("forwardPriceToEarningsRatio")
+    if isinstance(fp, (int, float)) and 0 < fp <= 500:
+        out["forward_pe"] = float(fp)
+
+    roe = j.get("returnOnEquity")
+    # Invesco 用百分比数字 (34.786... = 34.79%). sanity: -100 ~ +200%
+    if isinstance(roe, (int, float)) and -100 < roe <= 200:
+        out["roe"] = float(roe)
+
+    return out
+
+
+def fetch_invesco_forward_pe(cusip: str) -> float | None:
+    """兼容薄壳: 老接口只关心 forward P/E, 内部委托给
+    fetch_invesco_fund_characteristics。新代码请直接用后者拿 dict。
+    """
+    fc = fetch_invesco_fund_characteristics(cusip)
+    if fc is None:
         return None
-    if v <= 0 or v > 500:
+    return fc.get("forward_pe")
+
+
+# ---------- 抓取：Vanguard fund characteristics（VUG 等 Vanguard ETF 官方组合层面指标） ----------
+#
+# Vanguard 前端 SPA (investor.vanguard.com) 的 characteristic 数据取自静态 JSON:
+#   https://investor.vanguard.com/investment-products/etfs/profile/api/{ticker}/characteristic
+# 返回结构 (以 VUG 为例, 2026-06-30 快照):
+#   {
+#     "equityCharacteristic": {
+#       "asOfDate": "2026-06-30T00:00:00-04:00",
+#       "shortName": "Growth ETF               ",
+#       "benchmarkShortName": "Morningstar US Large Cap Growth Index",
+#       "fund": {
+#         "earningsGrowthRate": "32.4",        # % (裸数字字符串)
+#         "medianMarketCap":     "$1.8 trillion",
+#         "numberOfStocks":      "147",
+#         "priceEarningsRatio":  "35.6x",       # TTM 加权 (Morningstar 口径)
+#         "priceBookRatio":      "12.5x",
+#         "returnOnEquity":      "36.1",        # %
+#         "turnoverRate":        "12.3",        # %
+#         "foreignHolding":      "0.2",         # %
+#         "totalNetAssets":      "$378.8 billion",
+#         ...
+#       },
+#       "benchmark": { ...同上 fields... }
+#     },
+#     "fundCharacteristic": {}, "fixedIncomeCharacteristic": {}, "moneyMarketCharacteristic": {}
+#   }
+# SSGA / Invesco 提供 forward P/E, Vanguard 只公布截至月末的 TTM P/E + EPS growth + ROE,
+# 因此本函数只回填 eps_growth / roe (以补齐 ETF 专属列), forward P/E 保持 None。
+def fetch_vanguard_fund_characteristics(ticker: str) -> dict[str, float] | None:
+    """通过 Vanguard investor.vanguard.com 前端代理 API 拿指定 ETF 的组合层面
+    characteristics (Portfolio composition -> Characteristics 面板同源)。
+
+    URL 模式:
+      https://investor.vanguard.com/investment-products/etfs/profile/api/{ticker}/characteristic
+
+    返回 dict, key 缺失表示该项在 payload 里没提供或值非法:
+      - eps_growth : earningsGrowthRate    (百分比数值, 例如 32.4 表示 32.4%)
+      - roe        : returnOnEquity        (百分比数值, 例如 36.1 表示 36.1%)
+    """
+    api = (
+        f"https://investor.vanguard.com/investment-products/etfs/profile/api/"
+        f"{ticker.lower()}/characteristic"
+    )
+    req = urllib.request.Request(api, headers={
+        "User-Agent": UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"https://investor.vanguard.com/investment-products/etfs/profile/{ticker.lower()}",
+        "Origin": "https://investor.vanguard.com",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read()
+    except Exception as e:
+        print(f"  !! Vanguard characteristic API {api} failed: {e}", file=sys.stderr)
         return None
-    return float(v)
+    try:
+        j = json.loads(body.decode("utf-8", errors="replace"))
+    except Exception as e:
+        print(f"  !! Vanguard characteristic API parse failed: {e}", file=sys.stderr)
+        return None
+
+    fund = ((j.get("equityCharacteristic") or {}).get("fund") or {})
+    out: dict[str, float] = {}
+
+    # Vanguard 用裸数字字符串 (无 %/x 后缀), 直接 float 转换.
+    #   earningsGrowthRate "32.4" -> 32.4 (%)
+    #   returnOnEquity     "36.1" -> 36.1 (%)
+    def _to_pct(raw) -> float | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            v = float(raw.strip().rstrip("%"))
+        except ValueError:
+            return None
+        # sanity: -100 ~ +200% (增长率/ROE 都不该超出这个量级)
+        return v if -100 < v <= 200 else None
+
+    eg = _to_pct(fund.get("earningsGrowthRate"))
+    if eg is not None:
+        out["eps_growth"] = eg
+
+    roe = _to_pct(fund.get("returnOnEquity"))
+    if roe is not None:
+        out["roe"] = roe
+
+    return out
 
 
 # ---------- 解析：ratios 页（TTM 时间序列，如 PE / EV-EBIT） ----------
@@ -958,258 +1138,111 @@ def _build_1y_history(
 
 
 # ---------- DCF / Fair Value 抓取 ----------
-# DCF Tab 融合两个独立的公开数据源, 前端并列展示, 让用户能对比两方对"公允价值"的判断:
+# DCF Tab 采用"自己算"的方式: 前端用两阶段 Gordon Growth 公式做敏感性网格,
+#   V = Σ FCF₀·(1+g)^t / (1+WACC)^t + [FCF_N·(1+G) / (WACC-G)] / (1+WACC)^N
+# 其中显式期年数 N 由 1Y/3Y/5Y 按钮切换, X 轴 WACC (5-10%), Y 轴 g (0-10%),
+# 底部滑块控制永续增长 G (0-5%, 默认 2.5%)。每格显示 Upside% (相对当前股价)。
+# 权益价值 = EV - 净债务, 每股 = 权益 / 股本; 股本 / 债务 / 现金 / 股价 均已在
+# snapshot 里, 因此后端只需要额外抓一个基期 FCF₀ (TTM Free Cash Flow)。
 #
-#   Source A: financialmodelingprep.com  (`/stable/discounted-cash-flow`)
-#     FMP 用自家内部模型算出的 DCF 数字 (未公开假设); 免费 tier 一天 250 次。
-#     Legacy v3 `advanced_discounted_cash_flow` 自 2025-08-31 起对新用户全部 403,
-#     无法免费拿到分年 FCF/WACC/g 明细, 因此这里只取一个"单值"。
-#     另外调用 `/stable/levered-discounted-cash-flow` 作为对照 (考虑资本结构)。
+# 数据源: stockanalysis.com  `/stocks/{t}/financials/cash-flow-statement/?p=trailing`
+#   页面里嵌入了一个 JS 对象字面量, 内含所有科目的季度 TTM 序列, 字段名无引号,
+#   格式类似:  fcf:[136683000000, 129174000000, ...]  (新→旧)
+#   我们只取第 0 个元素作为最新 TTM FCF。ETF / 无 forecast 页的 ticker 返回 None,
+#   前端对应卡片显示"数据不可用"。
 #
-#   Source B: stockanalysis.com  (`/stocks/{t}/forecast/`)
-#     用正则从 HTML 解析出 Analyst Consensus 目标价 (avg/low/high)、评级分布、
-#     今明两年 Revenue/EPS 预测。真正的 DCF 分年数值需付费 ("Upgrade") 无法免费拿。
-#     用作 FMP 数字的"外部参考", 视角互补 (FMP=模型公允价, 分析师=市场共识价)。
-#
-# 两个数据源各自独立失败/成功; 任一为 None 则前端对应半张卡显示缺失原因。
-# ETF 两边都无法覆盖 (FMP endpoint 不支持, stockanalysis 无 forecast 页), 直接跳过。
-# API key 通过环境变量 FMP_API_KEY 读取; 未设置时 FMP 分支静默降级 (SA 分支不受影响)。
-def _fetch_fmp_dcf(ticker: str, market: str) -> dict | None:
-    """向 FMP `/stable/discounted-cash-flow` 请求一个单值 DCF 公允价值 (含 levered 对照)。
+# ETF 无 cash-flow 页, 上游直接跳过。FMP DCF endpoint 已不再使用 (免费 tier 无法
+# 拿到分年 FCF/WACC/g 明细); FMP_API_KEY 环境变量仍在, 供未来其它场景复用。
+def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
+    """从 stockanalysis.com 的 cash-flow-statement TTM 页抓最新 Free Cash Flow。
 
     Returns
     -------
     dict | None
-        None: 缺 key / 网络失败 / ticker 不支持 / 数据字段缺失。
-        dict: {"fair_value", "fair_value_l", "price", "asof", "source_url"}
-    """
-    import os
-    api_key = os.environ.get("FMP_API_KEY", "").strip()
-    if not api_key:
-        return None
-
-    # FMP 符号规则:
-    #   US 个股: 直接用 ticker (AAPL / MSFT / GOOGL)
-    #   HK 个股: FMP 用 "0700.HK" 这种带前导 0 的 4 位代码; 但免费 tier 港股覆盖率极低,
-    #           实际多数会返回空数组, 前端会显示 "N/A · FMP 免费版不覆盖该 ticker"
-    #   ETF:    FMP DCF endpoint 不支持 ETF, 上游已 return None, 这里不会走到
-    symbol = ticker.upper()
-    if market == "ETF":
-        return None
-    if market == "HK":
-        # FMP 港股符号: 4 位 + ".HK", 保留前导 0
-        symbol = f"{ticker.zfill(4)}.HK"
-
-    def _hit(path: str) -> dict | None:
-        """请求 FMP /stable/ endpoint, 返回第一条 dict 或 None (含所有错误分支)。"""
-        url = (
-            f"https://financialmodelingprep.com/stable/{path}"
-            f"?symbol={symbol}&apikey={api_key}"
-        )
-        safe_url = url.replace(api_key, "***")
-        req = urllib.request.Request(url, headers={
-            "User-Agent": UA,
-            "Accept": "application/json",
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as e:
-            # 403 legacy / 401 无效 key / 429 限流 / 404 ticker 不支持——都归入"无数据"
-            try:
-                err_body = e.read().decode("utf-8", errors="replace")[:200]
-            except Exception:
-                err_body = ""
-            print(f"  !! FMP {path} {symbol}: HTTP {e.code} {e.reason} {err_body} — {safe_url}",
-                  file=sys.stderr)
-            return None
-        except Exception as e:
-            print(f"  !! FMP {path} {symbol}: request failed ({e}) — {safe_url}", file=sys.stderr)
-            return None
-        try:
-            rows = json.loads(body)
-        except Exception as e:
-            print(f"  !! FMP {path} {symbol}: parse failed ({e})", file=sys.stderr)
-            return None
-        if isinstance(rows, dict) and "Error Message" in rows:
-            print(f"  !! FMP {path} {symbol}: {rows.get('Error Message')}", file=sys.stderr)
-            return None
-        if not isinstance(rows, list) or not rows:
-            print(f"  .. FMP {path} {symbol}: no data (unsupported symbol?)", file=sys.stderr)
-            return None
-        first = rows[0]
-        return first if isinstance(first, dict) else None
-
-    r1 = _hit("discounted-cash-flow")
-    r2 = _hit("levered-discounted-cash-flow")
-    if not r1 and not r2:
-        return None
-
-    def _num(d: dict | None, *keys) -> float | None:
-        if not d:
-            return None
-        for k in keys:
-            v = d.get(k)
-            if isinstance(v, (int, float)) and v == v:  # 排 NaN
-                return float(v)
-        return None
-
-    fair_value   = _num(r1, "dcf")
-    fair_value_l = _num(r2, "dcf")
-    price        = _num(r1, "Stock Price", "stockPrice") or _num(r2, "Stock Price", "stockPrice")
-    asof         = (r1 or r2 or {}).get("date")
-
-    if fair_value is None and fair_value_l is None:
-        return None
-
-    print(f"  ok FMP DCF {symbol}: FV=${fair_value or float('nan'):.2f} "
-          f"Levered=${fair_value_l or float('nan'):.2f}", file=sys.stderr)
-    return {
-        "fair_value":   fair_value,
-        "fair_value_l": fair_value_l,
-        "price":        price,
-        "asof":         asof,
-        "source_url":   f"https://site.financialmodelingprep.com/developer/docs/stable#discounted-cash-flow",
-    }
-
-
-# 匹配 stockanalysis forecast 页里 "Revenue This Year 477.37B" 这类行内文字段
-# 之所以直接 regex + 数字后缀而不上 HTML parser, 是为了保持"仅标准库"的项目原则。
-_SA_NUM_SUFFIX = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}
-_SA_NUM_RE = re.compile(r"([\-\+]?\d+(?:\.\d+)?)\s*([TBMK]?)")
-
-
-def _sa_num(s: str) -> float | None:
-    """将 '477.37B' / '$322.82' / '3.03%' 之类的字符串解析为纯浮点。失败返回 None。"""
-    if not s:
-        return None
-    s = s.replace(",", "").replace("$", "").replace("%", "").strip()
-    m = _SA_NUM_RE.match(s)
-    if not m:
-        return None
-    try:
-        v = float(m.group(1))
-    except ValueError:
-        return None
-    suf = m.group(2)
-    if suf and suf in _SA_NUM_SUFFIX:
-        v *= _SA_NUM_SUFFIX[suf]
-    return v
-
-
-def _sa_strip_html(s: str) -> str:
-    """粗清 HTML 标签 + 注释, 用于关键字附近取"可读的一小段文本"。"""
-    s = re.sub(r"<!--.*?-->", "", s, flags=re.DOTALL)
-    s = re.sub(r"<[^>]+>", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def _fetch_sa_forecast(ticker: str, market: str) -> dict | None:
-    """从 stockanalysis.com 的 forecast 页解析分析师共识 + 今明两年 Rev/EPS 预测。
-
-    仅个股, 且 stockanalysis 免费访问; 无 API key 依赖。
-    ETF 无 forecast 页 (404), 上游已 return None。
-
-    Returns
-    -------
-    dict | None
-        字段见 Row.dcf["sa"] 注释。抓取/解析失败均返回 None。
+        None: 页面 404 / 抓取失败 / 解析不到 fcf 字段。
+        dict: {"fcf_ttm": float(美元原值), "asof": str, "source_url": str}
     """
     if market == "ETF":
         return None
     if market == "HK":
-        # stockanalysis 港股 forecast 页路径: /quote/hkg/{code}/forecast/
-        url = f"https://stockanalysis.com/quote/hkg/{ticker}/forecast/"
+        # 港股路径: /quote/hkg/{code}/financials/cash-flow-statement/?p=trailing
+        url = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/cash-flow-statement/?p=trailing"
     else:
-        url = f"https://stockanalysis.com/stocks/{ticker.lower()}/forecast/"
+        url = f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/cash-flow-statement/?p=trailing"
 
     html = _get(url)
     if not html:
-        print(f"  .. SA forecast {ticker}: page not accessible ({url})", file=sys.stderr)
+        print(f"  .. SA FCF {ticker}: page not accessible ({url})", file=sys.stderr)
         return None
 
-    def _extract_target() -> tuple[float | None, float | None, float | None, float | None, str | None, int | None]:
-        """从 'Price Target: $322.82 (+3.03%)' 之类的文本抽取: (avg, low, high, upside_pct, consensus, num_analysts)."""
-        text = _sa_strip_html(html)
-        # 平均目标价 + upside 百分比
-        avg = up = None
-        m = re.search(r"Price Target:\s*\$([\d\.,]+)\s*\(([-\+][\d\.]+)%\)", text)
-        if m:
-            avg = _sa_num(m.group(1))
-            up  = _sa_num(m.group(2))
-        # low / high: 从 "Target Low Average Median High Price $215 $322.82 $330 $400" 抽 4 个数
-        low = high = None
-        m = re.search(r"Target\s+Low\s+Average\s+Median\s+High\s+Price\s+\$([\d\.,]+)\s+\$([\d\.,]+)\s+\$([\d\.,]+)\s+\$([\d\.,]+)", text)
-        if m:
-            low  = _sa_num(m.group(1))
-            high = _sa_num(m.group(4))
-        # 分析师评级 (consensus): "consensus rating of "Buy""
-        cons = None
-        m = re.search(r'consensus rating of\s*"?([A-Za-z ]+?)"?[\s\.,]', text)
-        if m:
-            cons = m.group(1).strip()
-        # 参与调查人数: "According to 46 analysts polled"
-        na = None
-        m = re.search(r"According to\s+(\d+)\s+analysts", text)
-        if m:
-            try:
-                na = int(m.group(1))
-            except ValueError:
-                pass
-        return avg, low, high, up, cons, na
-
-    def _extract_year_stat(label: str) -> float | None:
-        """抽取 "Revenue This Year 477.37B" 或 "EPS Next Year 9.51" 后紧邻的数值。"""
-        # 站点原始 HTML 中 label 后紧跟一个数值 span, 中间会有若干标签; 用 strip_html 兜住
-        m = re.search(re.escape(label) + r"[^<]*?</[^>]+>\s*(?:<[^>]+>\s*)*([\d\.,]+[TBMK]?)", html)
-        if m:
-            return _sa_num(m.group(1))
-        # 退化: 全文清洗后再找一次
-        text = _sa_strip_html(html)
-        m = re.search(re.escape(label) + r"\s+([\d\.,]+[TBMK]?)", text)
-        if m:
-            return _sa_num(m.group(1))
+    # 字段名无引号: fcf:[数值,数值,...]。数值可能为负 (亏钱的公司)。
+    # 数组顺序为"新→旧", 覆盖约 5 年 (20 个季度 TTM 点)。
+    m = re.search(r'\bfcf\s*:\s*\[([-0-9.eE, ]+)\]', html)
+    if not m:
+        print(f"  !! SA FCF {ticker}: 'fcf' array not found in page", file=sys.stderr)
         return None
-
-    tgt_avg, tgt_low, tgt_high, tgt_up, cons, na = _extract_target()
-    rev_this = _extract_year_stat("Revenue This Year")
-    rev_next = _extract_year_stat("Revenue Next Year")
-    eps_this = _extract_year_stat("EPS This Year")
-    eps_next = _extract_year_stat("EPS Next Year")
-
-    if tgt_avg is None and rev_this is None and eps_this is None:
-        # 一个字段都没抽到 = 页面结构完全变了或该 ticker 无预测
-        print(f"  !! SA forecast {ticker}: no fields parsed from {url}", file=sys.stderr)
+    raw = m.group(1)
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        print(f"  !! SA FCF {ticker}: 'fcf' array is empty", file=sys.stderr)
         return None
+    fcf_series: list[float] = []
+    for p in parts:
+        try:
+            fcf_series.append(float(p))
+        except ValueError:
+            # 单个坏值不阻塞整体 (页面偶尔会有 "null" 之类); 截断到已成功的部分
+            break
+    if not fcf_series:
+        print(f"  !! SA FCF {ticker}: cannot parse any fcf values (first={parts[0]!r})", file=sys.stderr)
+        return None
+    # 只保留前 20 个季度 (5 年), 太老的没意义
+    fcf_series = fcf_series[:20]
+    fcf_ttm = fcf_series[0]
 
-    print(f"  ok SA forecast {ticker}: target=${tgt_avg or float('nan'):.2f} ({tgt_up}%) "
-          f"rev_this={rev_this} eps_this={eps_this}", file=sys.stderr)
+    # 顺带抓 fiscalYear[0] 作为 "asof" 标签 (格式 "2026 Q3" 或年度 "2024")
+    asof = None
+    m2 = re.search(r'\bfiscalYear\s*:\s*\[([^\]]+)\]', html)
+    if m2:
+        vals = re.findall(r'"([^"]+)"', m2.group(1))
+        if vals:
+            asof = vals[0]
+    # 页面可能还有 fiscalQuarter: 用它补齐 "2026 Q3" 之类
+    mq = re.search(r'\bfiscalQuarter\s*:\s*\[([^\]]+)\]', html)
+    if mq and asof:
+        qs = re.findall(r'"([^"]+)"', mq.group(1))
+        if qs:
+            asof = f"{asof} {qs[0]}"
+
+    print(f"  ok SA FCF {ticker}: TTM FCF=${fcf_ttm/1e9:.2f}B  ({asof or 'n/a'}) "
+          f"series_len={len(fcf_series)}",
+          file=sys.stderr)
     return {
-        "target_avg":    tgt_avg,
-        "target_low":    tgt_low,
-        "target_high":   tgt_high,
-        "target_upside": tgt_up,
-        "consensus":     cons,
-        "num_analysts":  na,
-        "rev_this":      rev_this,
-        "rev_next":      rev_next,
-        "eps_this":      eps_this,
-        "eps_next":      eps_next,
-        "source_url":    url,
+        "fcf_ttm":    fcf_ttm,
+        "fcf_series": fcf_series,  # 新→旧, 最多 20 项 (季度 TTM); 供前端算历史 CAGR
+        "asof":       asof,
+        "source_url": url,
     }
 
 
 def _fetch_dcf(ticker: str, market: str, currency: str | None = None) -> dict | None:
-    """并行获取两个数据源, 合并为 Row.dcf; ETF 直接返回 None。"""
+    """获取 DCF 敏感性图所需的基期数据。ETF 直接返回 None。
+
+    前端还需要: shares_out / total_debt / cash / price / EBIT — 这些已经在 snapshot
+    里注入 JS, 因此这里只补 FCF₀ 一个字段。
+    """
     if market == "ETF":
         return None
-    fmp = _fetch_fmp_dcf(ticker, market)
-    sa  = _fetch_sa_forecast(ticker, market)
-    if fmp is None and sa is None:
+    fcf = _fetch_sa_fcf(ticker, market)
+    if fcf is None:
         return None
-    return {"fmp": fmp, "sa": sa, "currency": currency}
-
-
+    return {
+        "fcf_ttm":    fcf["fcf_ttm"],
+        "fcf_series": fcf.get("fcf_series") or [fcf["fcf_ttm"]],
+        "asof":       fcf.get("asof"),
+        "source_url": fcf["source_url"],
+        "currency":   currency,
+    }
 
 
 def _fetch_etf(ticker: str) -> Row:
@@ -1254,33 +1287,95 @@ def _fetch_etf(ticker: str) -> Row:
     # 其余 EV/EBIT 家族字段对 ETF 语义上不成立, 保持 None (前端渲染为 "-")。
     pe_raw  = etf.get("peRatio")
     aum_raw = etf.get("aum")
+    # ETF PE (TTM) 来自 stockanalysis 侧的组合层面加权 P/E; 每个 ETF 都从同一页面拉取,
+    # 所以 label 用统一的通用文案 (若日后不同 ETF 换源, 再按 ticker 分支覆盖)。
+    pe_ttm_source_label: str | None = None
+    eps_growth_source_label: str | None = None
+    roe_source_label: str | None = None
     if pe_raw is not None:
         row[FIELDS["pe"]] = pe_raw
+        pe_ttm_source_label = "stockanalysis.com · ETF weighted P/E (TTM)"
     if aum_raw is not None:
         # aum 形如 "$229.61B" / "$97.11B" -> 去掉 $ 前缀, 与股票列 "3.90T" 风格保持一致;
         # _fmt_number 只处理裸数字, fullmatch 失败会原样返回, 因此这里保留 "229.61B"
         # 字符串, 前端表格会原样显示 "229.61B"。
         row[FIELDS["marketcap"]] = aum_raw.lstrip("$").strip() or aum_raw
 
-    # -------- 发行商官方 Forward P/E (ETF 组合加权前瞻 P/E) --------
-    # 来自 ETF_FWD_PE_SOURCE 配置: SPYM 走 SSGA HTML, QQQM 走 Invesco dng-api,
-    # VUG 无源保持 None。Row.pe_forward_source 记录数据源标签, 前端在
-    # "P/E (Fwd)" 单元格的 title tooltip 里明确出处。
+    # -------- 发行商官方 ETF 组合层面指标 --------
+    # 一次性从发行商拿三项 (可拿到哪几项取决于源):
+    #   - Forward P/E     : 加权 harmonic FY1
+    #   - EPS Growth 3-5Y : 加权平均 (FactSet Estimates, 仅 SSGA 发布)
+    #   - ROE             : 加权平均 (仅 Invesco 发布)
+    # SPYM (SSGA HTML)     -> forward_pe, eps_growth        ; roe 保持 None
+    # QQQM (Invesco JSON)  -> forward_pe,           roe     ; eps_growth 保持 None
+    # VUG  (无源)          -> 三项都 None
+    # Row.pe_forward_source 记录 forward-PE 的数据源标签, 前端 P/E (Fwd) 单元格 tooltip 显示出处。
     fwd_pe_source_label: str | None = None
     fwd_src = ETF_FWD_PE_SOURCE.get(ticker.upper())
     if fwd_src is not None:
         fwd_label, fwd_arg, fwd_parser = fwd_src
         fwd_val: float | None = None
+        eps_g_val: float | None = None
+        roe_val: float | None = None
+
         if fwd_parser == "ssga_html":
+            # SSGA HTML 同一个页面里两项都能抓, 分两次请求 (SSGA 有 CDN 缓存, 无所谓)
             fwd_val = fetch_ssga_forward_pe(fwd_arg)
+            eps_g_val = fetch_ssga_eps_growth(fwd_arg)
         elif fwd_parser == "invesco_api":
-            fwd_val = fetch_invesco_forward_pe(fwd_arg)
+            # Invesco 一次 API 调用同时拿 forward PE + ROE
+            fc = fetch_invesco_fund_characteristics(fwd_arg)
+            if fc is not None:
+                fwd_val = fc.get("forward_pe")
+                roe_val = fc.get("roe")
+
         if fwd_val is not None:
             # 与其他 P/E 列的字符串格式保持一致 (2 位小数, 供 _parse_num 再解析)
             row[FIELDS["peForward"]] = f"{fwd_val:.2f}"
             fwd_pe_source_label = fwd_label
         else:
             print(f"  .. {ticker}: forward P/E unavailable from {fwd_label}", file=sys.stderr)
+
+        # 百分比字段: 存成裸数字字符串 (与 _cell_html 的 pct 分支约定一致),
+        # 例如 "18.43" -> 显示 "18.43%"
+        # label 也同步记录, 但为语义精确, 单独构造 (不复用 fwd_label 里的 PE 字段名):
+        #   - SSGA:    EPS Growth 走 FactSet 3-5Y 前瞻口径
+        #   - Invesco: ROE 走加权平均 (fundCharacteristics API 返回)
+        if eps_g_val is not None:
+            row[FIELDS["epsGrowth3To5Y"]] = f"{eps_g_val:.2f}"
+            if fwd_parser == "ssga_html":
+                eps_growth_source_label = (
+                    "SSGA · Est. 3-5 Year EPS Growth (FactSet Estimates, weighted mean)"
+                )
+            else:
+                eps_growth_source_label = fwd_label
+        if roe_val is not None:
+            row[FIELDS["returnOnEquity"]] = f"{roe_val:.2f}"
+            if fwd_parser == "invesco_api":
+                roe_source_label = (
+                    "Invesco dng-api · returnOnEquity (weighted average)"
+                )
+            else:
+                roe_source_label = fwd_label
+
+    # -------- Vanguard 官方 characteristic (VUG 等 Vanguard ETF) --------
+    # Vanguard 不发布 forward P/E, 但公布组合层面 TTM EPS growth + ROE (Morningstar 口径,
+    # 见 fetch_vanguard_fund_characteristics doc). 这里只回填 EPS growth / ROE 两项,
+    # 保留 fwd_src 分支已经填过的 forward_pe / eps_growth / roe (SSGA/Invesco 优先).
+    vg_src = ETF_VANGUARD_SOURCE.get(ticker.upper())
+    if vg_src is not None:
+        vg_label, vg_arg = vg_src
+        vc = fetch_vanguard_fund_characteristics(vg_arg)
+        if vc is not None:
+            # 仅当当前列为空时才回填 (不覆盖 SSGA/Invesco 已提供的更权威值)
+            if row[FIELDS["epsGrowth3To5Y"]] is None and "eps_growth" in vc:
+                row[FIELDS["epsGrowth3To5Y"]] = f"{vc['eps_growth']:.2f}"
+                eps_growth_source_label = vg_label
+            if row[FIELDS["returnOnEquity"]] is None and "roe" in vc:
+                row[FIELDS["returnOnEquity"]] = f"{vc['roe']:.2f}"
+                roe_source_label = vg_label
+        else:
+            print(f"  .. {ticker}: Vanguard characteristics unavailable ({vg_label})", file=sys.stderr)
 
     # -------- 指数代理: 历史 P/E 时序 --------
     # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个季末点 (NDX 免费版), 3Y = 5Y 尾部切片，
@@ -1348,12 +1443,18 @@ def _fetch_etf(ticker: str) -> Row:
                 r.pe_history_1y = pe_hist[-take_1y:] if len(pe_hist) > take_1y else list(pe_hist)
             r.pe_history_source = label
             r.pe_forward_source = fwd_pe_source_label
+            r.pe_ttm_source = pe_ttm_source_label
+            r.eps_growth_source = eps_growth_source_label
+            r.roe_source = roe_source_label
             return r
         else:
             print(f"  .. {ticker}: index PE history unavailable ({url})", file=sys.stderr)
 
     tail = Row(ticker, row)
     tail.pe_forward_source = fwd_pe_source_label
+    tail.pe_ttm_source = pe_ttm_source_label
+    tail.eps_growth_source = eps_growth_source_label
+    tail.roe_source = roe_source_label
     return tail
 
 
@@ -1526,6 +1627,8 @@ _HTML_HEADERS = {
     "PE":         "P/E&nbsp;(TTM)",
     "PE Fwd":     "P/E&nbsp;(Fwd)",
     "PEG":        "PEG",
+    "EPS Growth (3-5Y Est)": "EPS&nbsp;Growth&nbsp;(3-5Y&nbsp;Est)",
+    "ROE":        "ROE",
 }
 
 
@@ -1584,6 +1687,15 @@ def _cell_html(col: str, v: str | None, currency: str) -> str:
         disp = f"{num_val:,.2f}" if num_val is not None else html.escape(v)
         return f'<td class="num metric {cls}">{disp}</td>'
 
+    # ETF 专用: 百分比列 (值本身是形如 "18.43" 或 "34.78611755" 的裸数字, 单位是 %).
+    # 不做好坏染色 —— 高 ROE / 高 EPS growth 的"好"阈值跨行业差异极大,
+    # 不擅自染色, 只显示 2 位小数 + "%" 后缀.
+    if col in ("EPS Growth (3-5Y Est)", "ROE"):
+        num_val = _parse_num(v)
+        if num_val is None:
+            return f'<td class="num">{html.escape(v)}</td>'
+        return f'<td class="num pct">{num_val:,.2f}%</td>'
+
     if col == CLOSE_COL:
         # 收盘价：粗体单独展示
         return f'<td class="num close">{html.escape(v)}</td>'
@@ -1595,7 +1707,22 @@ def _cell_html(col: str, v: str | None, currency: str) -> str:
 
 
 def render_section_html(title: str, rows: list[Row], currency: str) -> str:
-    cols = ["Ticker", CLOSE_COL, CLOSE_DATE_COL] + list(FIELDS.values())
+    # ETF section 只展示对 ETF 语义上成立的指标列, 按“成长/质量优先, 估值靠后”顺序:
+    #   - EPS Growth  (发行商: SSGA 3-5Y EPS Growth; Invesco/VUG 无源)
+    #   - ROE         (发行商: Invesco returnOnEquity; SSGA/VUG 无源)
+    #   - PE          (ETF 加权 P/E, 来自 stockanalysis.com/etf/{t}/)
+    #   - PE Fwd      (发行商官方加权前瞻 P/E: SSGA / Invesco / VUG 无源)
+    # 其余列 (MarketCap/EV/Debt/Cash/EBIT/EV·EBIT/EV·EBITDA/PEG) 对 ETF
+    # 组合层面语义不成立, 直接不渲染, 表格更紧凑.
+    if title == "ETFs":
+        metric_cols = [FIELDS["epsGrowth3To5Y"], FIELDS["returnOnEquity"],
+                       FIELDS["pe"], FIELDS["peForward"]]
+    else:
+        # 个股: 沿用原来的完整列集 (排除 ETF 专用列)
+        metric_cols = [c for c in FIELDS.values()
+                       if c not in (FIELDS["epsGrowth3To5Y"], FIELDS["returnOnEquity"])]
+
+    cols = ["Ticker", CLOSE_COL, CLOSE_DATE_COL] + metric_cols
     header_html = "".join(
         f'<th>{_HTML_HEADERS.get(c, c)}</th>' for c in cols
     )
@@ -1830,6 +1957,8 @@ _HTML_TEMPLATE = """<!doctype html>
     position: fixed;
     right: 24px; top: 90px;
     width: min(560px, 42vw);
+    /* 高度上限 = 视口高度 - 顶部 90px - 底部留白 24px, 超出则内部滚动 */
+    max-height: calc(100vh - 114px);
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 16px;
@@ -1839,8 +1968,16 @@ _HTML_TEMPLATE = """<!doctype html>
     opacity: 0;
     pointer-events: none;
     transition: transform .28s ease, opacity .2s ease;
-    overflow: hidden;
+    /* 允许纵向滚动, 圆角裁剪保持原样 */
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
   }}
+  /* 自定义滚动条, 与暗色主题一致 */
+  .chart-panel::-webkit-scrollbar {{ width: 8px; }}
+  .chart-panel::-webkit-scrollbar-track {{ background: transparent; }}
+  .chart-panel::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 4px; }}
+  .chart-panel::-webkit-scrollbar-thumb:hover {{ background: var(--muted); }}
   .chart-panel.open {{
     transform: translateX(0);
     opacity: 1;
@@ -1850,7 +1987,9 @@ _HTML_TEMPLATE = """<!doctype html>
     display:flex; justify-content:space-between; align-items:center;
     padding: 14px 18px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--panel-2), transparent);
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    /* 顶部信息 + Close 按钮吸顶, 滚动时始终可见 */
+    position: sticky; top: 0; z-index: 3;
   }}
   .chart-title {{ font-size: 15px; font-weight: 700; letter-spacing:-.01em; }}
   .chart-sub   {{ font-size: 11.5px; color: var(--muted); margin-top: 2px; }}
@@ -1997,11 +2136,11 @@ _HTML_TEMPLATE = """<!doctype html>
     background: color-mix(in srgb, var(--panel-2) 70%, transparent);
   }}
 
-  /* ---------- DCF Tab 卡片样式 ---------- */
-  /* 每个 ticker 一张卡, 多选并排; 卡片内详列 FV / 假设 / 逐年 FCF 折现表。*/
+  /* ---------- DCF Tab: 敏感性网格样式 ----------
+     每个 ticker 一张卡, 卡内: 基础参数条 + 永续增长率 G 滑块 + WACC×g 网格。*/
   .dcf-grid {{
-    display: grid; gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
     padding: 4px 18px 8px;
   }}
   .dcf-card {{
@@ -2013,19 +2152,13 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .dcf-card.dcf-empty {{ opacity: .75; }}
   .dcf-card-head {{
-    display: flex; justify-content: space-between; align-items: flex-start;
-    gap: 12px; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 10px; margin-bottom: 8px;
     border-bottom: 1px dashed var(--border);
-    padding-bottom: 8px;
+    padding-bottom: 6px;
   }}
   .dcf-title b {{ font-size: 14px; color: var(--text); }}
   .dcf-sub {{ color: var(--muted); font-family: var(--mono); font-size: 10.5px; margin-left: 6px; }}
-  .dcf-fv {{ text-align: right; font-family: var(--mono); }}
-  .dcf-fv-main {{ color: var(--muted); font-size: 11px; }}
-  .dcf-fv-main b {{ color: var(--accent); font-size: 15px; margin-left: 4px; }}
-  .dcf-fv-sub  {{ color: var(--muted); font-size: 10.5px; margin-top: 3px; }}
-  .dcf-upside.pos {{ color: var(--good); font-weight: 700; }}
-  .dcf-upside.neg {{ color: var(--bad);  font-weight: 700; }}
   .dcf-empty-msg {{ color: var(--muted); font-size: 11.5px; line-height: 1.55; }}
   .dcf-empty-msg code {{
     font-family: var(--mono); font-size: 10.5px;
@@ -2033,120 +2166,134 @@ _HTML_TEMPLATE = """<!doctype html>
     background: color-mix(in srgb, var(--mid) 15%, transparent);
     color: var(--text);
   }}
-  .dcf-assump {{
-    display: flex; flex-wrap: wrap; gap: 6px 14px;
-    margin-bottom: 10px;
+
+  /* 卡顶基础参数条: FCF₀ · Shares · Net Debt · Price */
+  .dcf-params {{
+    display: flex; flex-wrap: wrap; gap: 4px 14px;
+    margin-bottom: 8px;
     font-family: var(--mono); font-size: 11px; color: var(--muted);
   }}
-  .dcf-assump b {{ color: var(--text); margin-right: 3px; }}
-  .dcf-table {{
-    width: 100%; border-collapse: collapse;
-    font-family: var(--mono); font-size: 11px;
-  }}
-  .dcf-table th {{
-    text-align: left; padding: 4px 6px;
-    color: var(--muted); font-weight: 600;
-    border-bottom: 1px solid var(--border);
-  }}
-  .dcf-table td {{
-    padding: 3px 6px; color: var(--text);
-    border-bottom: 1px dotted color-mix(in srgb, var(--border) 60%, transparent);
-  }}
-  .dcf-table td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  .dcf-table tr.dcf-tv-row td {{
-    color: var(--accent); font-weight: 600;
-    border-top: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    border-bottom: none;
-    padding-top: 5px;
-  }}
-  .dcf-table sup {{ font-size: 9px; }}
-
-  /* --- 方案 C: DCF Tab 单卡双列 (FMP 单值 + stockanalysis 分析师共识) --- */
-  /* 每张卡内部左右两列: 左 = FMP model, 右 = analyst consensus。各带独立来源标注。*/
-  .dcf-panels {{
-    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
-    margin-bottom: 8px;
-  }}
-  .dcf-panel {{
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 12px;
-    background: color-mix(in srgb, var(--panel-2) 40%, transparent);
-    min-height: 118px;
-    display: flex; flex-direction: column; gap: 6px;
-  }}
-  .dcf-panel.empty {{ opacity: .7; }}
-  .dcf-panel-head {{
-    display: flex; align-items: baseline; justify-content: space-between;
-    gap: 8px;
-    font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em;
-    color: var(--muted);
-  }}
-  .dcf-panel-head .src-tag {{
-    font-weight: 700; color: var(--accent);
-    text-transform: uppercase;
-  }}
-  .dcf-panel-head .src-link {{
+  .dcf-params b {{ color: var(--text); margin-left: 3px; }}
+  .dcf-params .src {{
+    margin-left: auto;
     color: var(--muted); text-decoration: none;
     border-bottom: 1px dotted currentColor;
+    font-size: 10.5px;
   }}
-  .dcf-panel-head .src-link:hover {{ color: var(--accent); border-color: var(--accent); }}
-  .dcf-panel .big-fv {{
-    font-family: var(--mono); font-size: 20px; font-weight: 700;
-    color: var(--text); letter-spacing: .02em;
-  }}
-  .dcf-panel .big-fv .fv-label {{
-    font-size: 10.5px; font-weight: 600; color: var(--muted);
-    margin-right: 6px; letter-spacing: .05em; text-transform: uppercase;
-  }}
-  .dcf-panel .fv-sub {{
+  .dcf-params .src:hover {{ color: var(--accent); border-color: var(--accent); }}
+
+  /* 永续增长率 G 滑块 */
+  .dcf-slider-row {{
+    display: flex; align-items: center; gap: 10px;
+    margin: 6px 0 10px;
     font-family: var(--mono); font-size: 11px; color: var(--muted);
   }}
-  .dcf-panel .fv-sub .dcf-upside {{ margin-left: 4px; }}
-  .dcf-panel .fv-alt {{
-    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
-    padding-top: 4px;
-    border-top: 1px dotted color-mix(in srgb, var(--border) 60%, transparent);
+  .dcf-slider-row .lbl {{ flex: 0 0 auto; }}
+  .dcf-slider-row .lbl b {{ color: var(--text); }}
+  .dcf-slider-row input[type=range] {{
+    flex: 1 1 auto; accent-color: var(--accent);
+    height: 4px; cursor: pointer;
   }}
-  .dcf-panel .fv-alt b {{ color: var(--text); }}
-  .dcf-panel .consensus-line {{
-    font-family: var(--mono); font-size: 11px; color: var(--muted);
-    display: flex; flex-wrap: wrap; gap: 4px 10px;
-  }}
-  .dcf-panel .consensus-line b {{ color: var(--text); }}
-  .dcf-panel .consensus-line .rating.buy  {{ color: var(--good); font-weight: 700; }}
-  .dcf-panel .consensus-line .rating.hold {{ color: var(--mid);  font-weight: 700; }}
-  .dcf-panel .consensus-line .rating.sell {{ color: var(--bad);  font-weight: 700; }}
-  .dcf-mini-tbl {{
-    width: 100%; border-collapse: collapse;
-    font-family: var(--mono); font-size: 11px; margin-top: 2px;
-  }}
-  .dcf-mini-tbl th {{
-    text-align: right; padding: 2px 6px 2px 0; font-weight: 600;
-    color: var(--muted);
-  }}
-  .dcf-mini-tbl td {{
-    text-align: right; padding: 2px 6px 2px 0;
-    color: var(--text); font-variant-numeric: tabular-nums;
-  }}
-  .dcf-mini-tbl th:first-child, .dcf-mini-tbl td:first-child {{
-    text-align: left; color: var(--muted); font-weight: 600;
-  }}
-  .dcf-panel .empty-msg {{
-    color: var(--muted); font-size: 11.5px; line-height: 1.55;
-  }}
-  .dcf-panel .empty-msg code {{
-    font-family: var(--mono); font-size: 10.5px;
-    padding: 1px 4px; border-radius: 3px;
-    background: color-mix(in srgb, var(--mid) 15%, transparent);
-    color: var(--text);
+  .dcf-slider-row .val {{
+    flex: 0 0 auto; min-width: 44px; text-align: right;
+    color: var(--accent); font-weight: 700;
   }}
 
-  /* range-group 在 DCF Tab 上无意义 (拿不到分年数据), 整组隐藏 */
+  /* 网格表 (WACC × g) */
+  .dcf-heatmap {{
+    width: 100%; border-collapse: separate; border-spacing: 2px;
+    font-family: var(--mono); font-size: 10.5px;
+    table-layout: fixed;
+  }}
+  .dcf-heatmap thead th {{
+    padding: 3px 0; color: var(--muted); font-weight: 700;
+    letter-spacing: .04em;
+  }}
+  .dcf-heatmap th.corner {{
+    color: var(--muted); font-size: 9.5px;
+    text-align: right; padding-right: 6px;
+    line-height: 1.15;
+  }}
+  .dcf-heatmap th.corner .arrow {{ opacity: .55; }}
+  .dcf-heatmap tbody th {{
+    text-align: right; padding: 0 6px 0 0;
+    color: var(--muted); font-weight: 600;
+    font-size: 10.5px;
+  }}
+  .dcf-heatmap td.hm {{
+    padding: 3px 2px; text-align: center;
+    font-variant-numeric: tabular-nums;
+    border-radius: 3px;
+    color: var(--text); font-weight: 600;
+    cursor: help;
+    white-space: nowrap;
+    /* 背景色由 JS 内联 style 注入 (HSL 红→绿) */
+  }}
+  .dcf-heatmap td.hm.err {{
+    color: var(--muted); background: transparent; font-weight: 400;
+  }}
+  /* 悬浮时更亮 */
+  .dcf-heatmap td.hm:hover {{
+    outline: 1.5px solid var(--accent);
+    outline-offset: -1px;
+  }}
+
+  /* 插值行: 由 Actual g 精确值 (如 8.5%) 生成的独立行, 位于两档整数 g 之间 */
+  .dcf-heatmap tbody tr.actual-row th {{
+    color: var(--accent); font-weight: 700; font-style: italic;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }}
+  .dcf-heatmap tbody tr.actual-row td.hm {{
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  }}
+  /* 超界的 actual 行 (CAGR ≥ 10% 或 ≤ 0%): 用虚线上/下边框强调其位于网格外 */
+  .dcf-heatmap tbody tr.actual-row.out-of-range th,
+  .dcf-heatmap tbody tr.actual-row.out-of-range td {{
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border-top: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+    border-bottom: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  }}
+  .dcf-heatmap tbody tr.actual-row.out-of-range th {{
+    font-size: 11px;   /* 箭头前缀 + 小数留出空间 */
+  }}
+
+  /* 卡底小结 */
+  .dcf-footer {{
+    margin-top: 8px; padding-top: 6px;
+    border-top: 1px dashed var(--border);
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 4px 12px;
+  }}
+  .dcf-footer b {{ color: var(--text); }}
+  .dcf-footer .dcf-upside.pos {{ color: var(--good); font-weight: 700; }}
+  .dcf-footer .dcf-upside.neg {{ color: var(--bad);  font-weight: 700; }}
+  /* CAGR chip: 主行百分比 + 副行端点数值 (FCF₋ₙ → FCF₀), 供 CAGR 溯源 */
+  .dcf-footer .dcf-cagr-chip {{
+    display: inline-flex; flex-direction: column; line-height: 1.15;
+    padding: 1px 2px; cursor: help;
+  }}
+  /* 档位标签 (1y/3y/5y): 默认不加粗, 仅当前档加粗以突出 */
+  .dcf-footer .dcf-cagr-chip .dcf-cagr-label {{ font-weight: 400; color: var(--text); }}
+  .dcf-footer .dcf-cagr-chip.current .dcf-cagr-label {{ font-weight: 700; }}
+  .dcf-footer .dcf-cagr-endpoints {{
+    font-size: 9px; color: var(--muted); opacity: 0.85;
+    font-family: var(--mono);
+  }}
+  /* 当前 N 档: 端点数值也高亮 (与百分比同色, 但字重稍轻形成层次); 正/负分别绿/红 */
+  .dcf-footer .dcf-cagr-endpoints.pos {{
+    color: var(--good); opacity: 1; font-weight: 600;
+  }}
+  .dcf-footer .dcf-cagr-endpoints.neg {{
+    color: var(--bad);  opacity: 1; font-weight: 600;
+  }}
+
+  /* range-group 在 DCF Tab 上语义变为"预测期年数", 显示不隐藏 */
   .range-group.hidden {{ display: none; }}
 
   @media (max-width: 640px) {{
-    .dcf-panels {{ grid-template-columns: 1fr; }}
+    .dcf-grid {{ grid-template-columns: 1fr; }}
+    .dcf-heatmap {{ font-size: 9.5px; }}
   }}
 
   @media (max-width: 900px) {{
@@ -2276,6 +2423,15 @@ _HTML_TEMPLATE = """<!doctype html>
     // ticker -> Forward P/E (P/E Fwd 列) 的数据源标签（仅 ETF 有值, 例 SSGA/Invesco）。
     // 页面加载后会给对应 ticker 行的 "P/E (Fwd)" 单元格追加 title tooltip, 悬停可见出处。
     const FWD_SOURCE = {fwd_source_json};
+    // ticker -> P/E (TTM) 单元格数据源标签. 个股走 stockanalysis Statistics,
+    // ETF 走 stockanalysis /etf/{{t}}/ 主页. 与 FWD_SOURCE 采用相同的 tooltip 挂载方式.
+    const PE_TTM_SOURCE = {pe_ttm_source_json};
+    // ticker -> EPS Growth (3-5Y Est) 单元格数据源标签 (仅 ETF, 个股此列无数据).
+    // SSGA: FactSet 3-5Y 前瞻; Vanguard (VUG): Morningstar TTM 增速回填.
+    const EPS_GROWTH_SOURCE = {eps_growth_source_json};
+    // ticker -> ROE 单元格数据源标签 (仅 ETF).
+    // Invesco (QQQM): fundCharacteristics API; Vanguard (VUG/SPYM via VOO proxy): characteristic API.
+    const ROE_SOURCE = {roe_source_json};
     // ticker -> 公司主页域名，用于 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {logo_map_json};
     // 生成一段 <img> 或空串（前端所有 ticker 出现处统一用它拼装图标）
@@ -2358,11 +2514,14 @@ _HTML_TEMPLATE = """<!doctype html>
       const rangeBtns   = document.querySelectorAll('.range-btn');
       const rangeGroupE = document.getElementById('rangeGroup');
 
-      // DCF Tab 隐藏 1Y/3Y/5Y range 组 (两个数据源都不提供分年数据), 其他 Tab 恢复显示。
-      // 单独抽成函数以便在 syncTabVisibility / Tab click 里复用。
+      // Range 按钮组语义随 Tab 变化:
+      //   P/E / EV·EBIT: 历史区间 1Y/3Y/5Y (曲线时间跨度)
+      //   DCF:           显式预测期年数 1/3/5 年 (N)
+      // 因此 DCF Tab 下也需要显示 range 组, 不再隐藏。此函数目前作为占位保留,
+      // 未来若需要按其他 Tab 语义再隐藏 range 组可以在此处扩展。
       function syncRangeGroupVisibility() {{
         if (!rangeGroupE) return;
-        rangeGroupE.classList.toggle('hidden', currentMetric === 'dcf');
+        rangeGroupE.classList.remove('hidden');
       }}
 
       const selected = new Map();   // ticker -> color
@@ -2380,143 +2539,125 @@ _HTML_TEMPLATE = """<!doctype html>
         return Number(v).toFixed(2);
       }}
 
-      // ---------------- DCF Tab 专用渲染 (方案 C: 双数据源并列) ----------------
-      //   显示: 每个 ticker 一张卡, 卡内左右两个 panel:
-      //     - 左 panel: FMP DCF (financialmodelingprep.com /stable/discounted-cash-flow)
-      //         免费 tier 只给一个"内部黑盒"公允价值数字; 附 levered 版对照。
-      //     - 右 panel: Analyst Consensus (stockanalysis.com /stocks/TICKER/forecast/)
-      //         分析师共识目标价 (avg/low/high)、评级、今明两年 EPS/Revenue 预测。
-      //   注意: 两个来源都不提供"分年 DCF", 所以 1Y/3Y/5Y range 按钮在 DCF Tab 隐藏。
+      // ---------------- DCF Tab: 自建两阶段 DCF 敏感性网格 ----------------
+      //   每个 ticker 一张卡:
+      //     基础参数条: FCF₀ (TTM, 来自 stockanalysis) · Shares · Net Debt · Price
+      //     滑块: 永续增长率 G ∈ [0%, 5%], 默认 2.5% (~ 名义通胀)
+      //     网格: X 轴 WACC ∈ [5%, 10%] 步长 1% (6 列)
+      //           Y 轴 g    ∈ [0%, 10%] 步长 1% (11 行, 从上往下: 10% -> 0%)
+      //           每格显示 Upside% (每股公允价 vs 现价), 颜色 HSL 红→绿。
+      //   预测期年数 N 由 1Y/3Y/5Y 按钮切换 (在 DCF Tab 下按钮语义变为"显式预测期长度")。
+      //   数学:  V = Σ_{{t=1..N}} FCF₀·(1+g)^t / (1+WACC)^t
+      //             + [FCF_N·(1+G) / (WACC-G)] / (1+WACC)^N
+      //          Equity = V - NetDebt;  每股 = Equity / Shares
+      // -----------------------------------------------------------------------
+      const DCF_WACC_LIST = [0.05, 0.06, 0.07, 0.08, 0.09, 0.10];
+      const DCF_G_LIST    = [0.10, 0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.01, 0.00];
+      const DCF_G_DEFAULT = 0.025;   // 永续增长率默认值 (名义通胀参考)
+      const N_MAP = {{ '1y': 1, '3y': 3, '5y': 5 }};   // range 按钮在 DCF Tab 下的语义
+
       function fmtMoney(v, digits) {{
         if (v == null || !isFinite(v)) return 'N/A';
         const d = (digits == null) ? (Math.abs(v) >= 100 ? 1 : 2) : digits;
         return '$' + Number(v).toFixed(d);
       }}
       function fmtBig(v) {{
-        // 大数字用 T/B/M 后缀, 与表格中的 EBIT / Debt / Cash 列风格一致
         if (v == null || !isFinite(v)) return 'N/A';
         const a = Math.abs(v);
-        if (a >= 1e12) return (v/1e12).toFixed(2) + 'T';
-        if (a >= 1e9)  return (v/1e9).toFixed(2)  + 'B';
-        if (a >= 1e6)  return (v/1e6).toFixed(2)  + 'M';
+        const sign = v < 0 ? '-' : '';
+        if (a >= 1e12) return sign + (a/1e12).toFixed(2) + 'T';
+        if (a >= 1e9)  return sign + (a/1e9).toFixed(2)  + 'B';
+        if (a >= 1e6)  return sign + (a/1e6).toFixed(2)  + 'M';
+        if (a >= 1e3)  return sign + (a/1e3).toFixed(2)  + 'K';
         return v.toFixed(2);
       }}
       function fmtPct(v, digits) {{
         if (v == null || !isFinite(v)) return 'N/A';
         return Number(v).toFixed(digits == null ? 2 : digits) + '%';
       }}
-      function ratingClass(c) {{
-        if (!c) return '';
-        const s = String(c).toLowerCase();
-        if (s.indexOf('buy')  >= 0) return 'buy';
-        if (s.indexOf('sell') >= 0) return 'sell';
-        return 'hold';
-      }}
-      // 计算 upside%: (fv - price) / price * 100
       function upsidePct(fv, price) {{
         if (fv == null || price == null || !price) return null;
         return (fv - price) / price * 100.0;
       }}
       function upsideSpan(up) {{
-        if (up == null) return `<span class="dcf-upside">N/A</span>`;
+        if (up == null || !isFinite(up)) return `<span class="dcf-upside">N/A</span>`;
         const cls = up >= 0 ? 'pos' : 'neg';
         const sig = up >= 0 ? '+' : '';
         return `<span class="dcf-upside ${{cls}}">${{sig}}${{up.toFixed(1)}}%</span>`;
       }}
-      // 左 panel: FMP DCF 单值 + levered 对照 + upside
-      function renderFmpPanel(ticker, dcf, price) {{
-        const fmp = dcf && dcf.fmp;
-        if (!fmp) {{
-          return `<div class="dcf-panel empty">`
-               +   `<div class="dcf-panel-head">`
-               +     `<span class="src-tag">FMP · DCF Model</span>`
-               +     `<a class="src-link" href="https://site.financialmodelingprep.com/developer/docs/stable#discounted-cash-flow" target="_blank" rel="noopener">source</a>`
-               +   `</div>`
-               +   `<div class="empty-msg">`
-               +     `无 FMP DCF 数据. 可能原因: `
-               +     `<br/>· <code>FMP_API_KEY</code> 未设置 (workflow secret / 本地环境变量)`
-               +     `<br/>· FMP 免费版不覆盖该 ticker (港股 / 小市值常见)`
-               +     `<br/>· 每日免费额度 250 次已耗尽`
-               +   `</div>`
-               + `</div>`;
-        }}
-        const fv    = fmp.fair_value;
-        const fvL   = fmp.fair_value_l;
-        const pref  = (price != null) ? price : fmp.price;
-        const up    = upsidePct(fv,  pref);
-        const upL   = upsidePct(fvL, pref);
-        const asof  = fmp.asof || '';
-        let altHtml = '';
-        if (fvL != null) {{
-          altHtml = `<div class="fv-alt">`
-                  +   `<b>Levered DCF</b> ${{fmtMoney(fvL)}} · ${{upsideSpan(upL)}} `
-                  +   `<span style="opacity:.7">(considers capital structure)</span>`
-                  + `</div>`;
-        }}
-        return `<div class="dcf-panel">`
-             +   `<div class="dcf-panel-head">`
-             +     `<span class="src-tag">FMP · DCF Model</span>`
-             +     `<a class="src-link" href="${{fmp.source_url}}" target="_blank" rel="noopener">source${{asof ? ' · ' + asof : ''}}</a>`
-             +   `</div>`
-             +   `<div class="big-fv"><span class="fv-label">Fair Value</span>${{fmtMoney(fv)}}</div>`
-             +   `<div class="fv-sub">vs current ${{fmtMoney(pref)}} · ${{upsideSpan(up)}}</div>`
-             +   altHtml
-             + `</div>`;
-      }}
-      // 右 panel: stockanalysis 分析师共识目标价 + 评级 + Rev/EPS 今明年
-      function renderSaPanel(ticker, dcf, price) {{
-        const sa = dcf && dcf.sa;
-        if (!sa) {{
-          return `<div class="dcf-panel empty">`
-               +   `<div class="dcf-panel-head">`
-               +     `<span class="src-tag">Analyst Consensus</span>`
-               +     `<a class="src-link" href="https://stockanalysis.com/stocks/${{ticker.toLowerCase()}}/forecast/" target="_blank" rel="noopener">stockanalysis.com</a>`
-               +   `</div>`
-               +   `<div class="empty-msg">`
-               +     `无分析师共识数据. 可能是该 ticker 无分析师覆盖, 或站点结构变化, 解析失败.`
-               +   `</div>`
-               + `</div>`;
-        }}
-        // 站点直接给出 upside 百分比 (基于抓取时刻的现价); 若我们本地价与抓取时不同, 优先用本地价重算
-        const localUp = upsidePct(sa.target_avg, price);
-        const up      = (localUp != null) ? localUp : sa.target_upside;
 
-        // Rev/EPS 两年小表
-        let miniTbl = '';
-        if (sa.rev_this != null || sa.eps_this != null) {{
-          miniTbl =
-              `<table class="dcf-mini-tbl">`
-            +   `<thead><tr><th></th><th>This Year</th><th>Next Year</th></tr></thead>`
-            +   `<tbody>`
-            +     `<tr><td>Revenue</td><td>${{fmtBig(sa.rev_this)}}</td><td>${{fmtBig(sa.rev_next)}}</td></tr>`
-            +     `<tr><td>EPS</td><td>${{sa.eps_this != null ? sa.eps_this.toFixed(2) : 'N/A'}}</td>`
-            +         `<td>${{sa.eps_next != null ? sa.eps_next.toFixed(2) : 'N/A'}}</td></tr>`
-            +   `</tbody>`
-            + `</table>`;
+      // 两阶段 DCF: 返回 EV (企业价值)。terminal 无解时返回 null。
+      //   fcf0: 基期自由现金流 (美元原值)
+      //   g:    显式预测期年增速
+      //   wacc: 折现率
+      //   G:    永续增长率
+      //   N:    显式预测期年数
+      function dcfEV(fcf0, g, wacc, G, N) {{
+        if (fcf0 == null || !isFinite(fcf0)) return null;
+        // 显式期折现和
+        let pv = 0;
+        let fcfN = fcf0;
+        for (let t = 1; t <= N; t++) {{
+          fcfN = fcfN * (1 + g);   // FCF₀·(1+g)^t 迭代
+          pv += fcfN / Math.pow(1 + wacc, t);
         }}
-        // 评级 + 分析师人数
-        let consLine = '';
-        if (sa.consensus || sa.num_analysts != null) {{
-          const rc = ratingClass(sa.consensus);
-          consLine = `<div class="consensus-line">`
-                   +   (sa.consensus ? `<span><b>Rating</b> <span class="rating ${{rc}}">${{sa.consensus}}</span></span>` : '')
-                   +   (sa.num_analysts != null ? `<span><b>Analysts</b> ${{sa.num_analysts}}</span>` : '')
-                   +   ((sa.target_low != null && sa.target_high != null) ?
-                        `<span><b>Range</b> ${{fmtMoney(sa.target_low)}} – ${{fmtMoney(sa.target_high)}}</span>` : '')
-                   + `</div>`;
-        }}
-        return `<div class="dcf-panel">`
-             +   `<div class="dcf-panel-head">`
-             +     `<span class="src-tag">Analyst Consensus</span>`
-             +     `<a class="src-link" href="${{sa.source_url}}" target="_blank" rel="noopener">stockanalysis.com</a>`
-             +   `</div>`
-             +   `<div class="big-fv"><span class="fv-label">Target Price</span>${{fmtMoney(sa.target_avg)}}</div>`
-             +   `<div class="fv-sub">vs current ${{fmtMoney(price)}} · ${{upsideSpan(up)}}</div>`
-             +   consLine
-             +   miniTbl
-             + `</div>`;
+        // Gordon 终值 (WACC 必须严格 > G, 否则模型爆炸)
+        if (wacc <= G) return null;
+        const tv    = fcfN * (1 + G) / (wacc - G);
+        const tvPV  = tv / Math.pow(1 + wacc, N);
+        return pv + tvPV;
       }}
-      // 渲染一张 ticker 卡: 头部 (ticker + 币种) + 双 panel
+      // 每股公允价 = (EV - NetDebt) / Shares
+      function dcfPerShare(fcf0, g, wacc, G, N, shares, netDebt) {{
+        const ev = dcfEV(fcf0, g, wacc, G, N);
+        if (ev == null || shares == null || !shares) return null;
+        return (ev - (netDebt || 0)) / shares;
+      }}
+
+      // 上涨空间百分比 → 颜色 (与全站 strong/weak 图例对齐):
+      //   Upside > 0 (低估, cheap/strong) → --good (#22c55e, 绿)
+      //   Upside < 0 (高估, rich/weak)   → --bad  (#ef4444, 红)
+      // Alpha 随 |up|/50 从 0.10 递增到 0.55, 越极端越深, 便于扫读。
+      function upsideToColor(up) {{
+        if (up == null || !isFinite(up)) return 'transparent';
+        let x = up / 50;
+        if (x >  1) x =  1;
+        if (x < -1) x = -1;
+        const alpha = (0.10 + 0.45 * Math.abs(x)).toFixed(3);
+        // 与 CSS 里的 --good / --bad 保持同源 RGB
+        return x >= 0
+          ? `rgba(34, 197, 94, ${{alpha}})`   // good
+          : `rgba(239, 68, 68, ${{alpha}})`;  // bad
+      }}
+
+      // 用过去 N 年 (N∈{{1,3,5}}) 的季度 TTM FCF 数据算历史 CAGR。
+      //   fcfSeries: 新→旧, 季度 TTM 序列 (最多 20 项)。
+      //   startIdx = N*4 (1Y=4, 3Y=12, 5Y=19: 因为 20 个点最旧下标 19)。
+      //   基期或终期 ≤ 0 → 不能算 (符号变化时 CAGR 无几何意义), 返回 null。
+      //   数据不足 → 返回 null (前端显示 "N/A")。
+      function fcfCagrPastN(fcfSeries, N) {{
+        if (!Array.isArray(fcfSeries) || fcfSeries.length < 2) return null;
+        // 5Y 特殊处理: 20 个点最旧下标 19, 时间跨度 ≈ 19/4 = 4.75 年, 近似当 5 年
+        // 1Y: 需要下标 4;  3Y: 需要下标 12
+        let startIdx, years;
+        if (N === 1)      {{ startIdx = 4;  years = 1; }}
+        else if (N === 3) {{ startIdx = 12; years = 3; }}
+        else              {{ startIdx = Math.min(19, fcfSeries.length - 1);
+                            years = startIdx / 4; }}
+        if (startIdx >= fcfSeries.length) return null;
+        const now  = fcfSeries[0];
+        const then = fcfSeries[startIdx];
+        if (now == null || then == null) return null;
+        // 端点法: CAGR = (now / then)^(1/years) - 1
+        // 任一端点 ≤ 0 → CAGR 几何上无意义 (跨零点), 返回 n/m 并注明原因端。
+        if (now <= 0 && then <= 0) return {{ nm: true, nmReason: 'both', now, then, years }};
+        if (now <= 0)              return {{ nm: true, nmReason: 'now',  now, then, years }};
+        if (then <= 0)             return {{ nm: true, nmReason: 'then', now, then, years }};
+        const cagr = Math.pow(now / then, 1 / years) - 1;
+        return {{ cagr, now, then, years }};
+      }}
+
+      // 生成一张 DCF 卡的 HTML (静态骨架, 网格由 dcfRecomputeCard 首次填充)
       function renderDcfCard(ticker) {{
         const dcf   = DCF_DATA[ticker];
         const snap  = SNAPSHOT[ticker] || {{}};
@@ -2525,28 +2666,295 @@ _HTML_TEMPLATE = """<!doctype html>
         const isETF = ETF_SET.has(ticker);
 
         if (isETF) {{
-          return `<div class="dcf-card dcf-empty">`
+          return `<div class="dcf-card dcf-empty" data-ticker="${{ticker}}">`
                +   `<div class="dcf-card-head"><div class="dcf-title"><b>${{ticker}}</b> <span class="dcf-sub">ETF</span></div></div>`
                +   `<div class="dcf-empty-msg">ETF 组合层面无 DCF 概念, 未做建模。</div>`
                + `</div>`;
         }}
-        // 即便 dcf 为 null, 也要给出双 panel 布局的空态 (两个都是 empty)
-        return `<div class="dcf-card">`
+        if (!dcf || dcf.fcf_ttm == null) {{
+          return `<div class="dcf-card dcf-empty" data-ticker="${{ticker}}">`
+               +   `<div class="dcf-card-head"><div class="dcf-title"><b>${{ticker}}</b> <span class="dcf-sub">${{cur||''}}</span></div></div>`
+               +   `<div class="dcf-empty-msg">`
+               +     `未抓到基期 <b>FCF (TTM)</b>. 可能是 stockanalysis 的 `
+               +     `<code>/financials/cash-flow-statement/?p=trailing</code> 页面结构变化,`
+               +     `或该 ticker 无 TTM 数据.`
+               +   `</div>`
+               + `</div>`;
+        }}
+        const fcf0    = dcf.fcf_ttm;
+        const shares  = snap.shares;
+        const netDebt = (snap.debt || 0) - (snap.cash || 0);
+        const asof    = dcf.asof || '';
+        const url     = dcf.source_url || '#';
+
+        // 卡骨架: 参数条 + 滑块 + 网格容器 + footer
+        const gPct = (DCF_G_DEFAULT * 100).toFixed(1);
+        return `<div class="dcf-card" data-ticker="${{ticker}}">`
              +   `<div class="dcf-card-head">`
-             +     `<div class="dcf-title"><b>${{ticker}}</b> <span class="dcf-sub">${{cur||''}}</span></div>`
-             +     `<div class="dcf-fv"><div class="dcf-fv-sub">Current ${{fmtMoney(price)}}</div></div>`
+             +     `<div class="dcf-title"><b>${{ticker}}</b> <span class="dcf-sub">${{cur||''}} · N=<span class="dcf-n">?</span>y</span></div>`
+             +     `<div class="dcf-sub">Current ${{fmtMoney(price)}}</div>`
              +   `</div>`
-             +   `<div class="dcf-panels">`
-             +     renderFmpPanel(ticker, dcf, price)
-             +     renderSaPanel(ticker, dcf, price)
+             +   `<div class="dcf-params">`
+             +     `<span>FCF₀ <b>${{fmtBig(fcf0)}}</b></span>`
+             +     `<span>Shares <b>${{fmtBig(shares)}}</b></span>`
+             +     `<span>Net Debt <b>${{fmtBig(netDebt)}}</b></span>`
+             +     `<a class="src" href="${{url}}" target="_blank" rel="noopener">source · ${{asof || 'TTM'}}</a>`
              +   `</div>`
+             +   `<div class="dcf-slider-row">`
+             +     `<span class="lbl"><b>Perpetual g (G)</b></span>`
+             +     `<input type="range" class="dcf-g-slider" min="0" max="5" step="0.1" value="${{gPct}}" aria-label="Perpetual growth rate">`
+             +     `<span class="val dcf-g-val">${{gPct}}%</span>`
+             +   `</div>`
+             +   `<div class="dcf-heatmap-wrap"><!-- filled by dcfRecomputeCard --></div>`
+             +   `<div class="dcf-footer"><!-- filled by dcfRecomputeCard --></div>`
              + `</div>`;
       }}
+
+      // 根据当前 range (=N) 和当前滑块 G 值, 重算一张卡的网格 + footer。
+      // cardEl: .dcf-card DOM;  N: 显式期年数
+      function dcfRecomputeCard(cardEl, N) {{
+        const ticker = cardEl.getAttribute('data-ticker');
+        const dcf    = DCF_DATA[ticker];
+        if (!dcf || dcf.fcf_ttm == null) return;   // 空态卡不重算
+        const snap    = SNAPSHOT[ticker] || {{}};
+        const fcf0    = dcf.fcf_ttm;
+        const shares  = snap.shares;
+        const netDebt = (snap.debt || 0) - (snap.cash || 0);
+        const price   = snap.close;
+        // 读滑块
+        const slider = cardEl.querySelector('.dcf-g-slider');
+        const gPct   = slider ? parseFloat(slider.value) : (DCF_G_DEFAULT * 100);
+        const G      = gPct / 100;
+        // 更新滑块显示 + N 显示
+        const valE = cardEl.querySelector('.dcf-g-val');
+        if (valE) valE.textContent = gPct.toFixed(1) + '%';
+        const nE = cardEl.querySelector('.dcf-n');
+        if (nE) nE.textContent = String(N);
+
+        // 计算 1/3/5 年历史 CAGR (用于 tooltip)
+        const cagr1 = fcfCagrPastN(dcf.fcf_series, 1);
+        const cagr3 = fcfCagrPastN(dcf.fcf_series, 3);
+        const cagr5 = fcfCagrPastN(dcf.fcf_series, 5);
+        // 当前 N 对应的历史 CAGR (决定是否插入 actual 行)
+        const cagrCur = (N === 1) ? cagr1 : (N === 3 ? cagr3 : cagr5);
+        // 参考列 tooltip - 显示三档 CAGR + 明确的计算方法说明
+        // 单位换算: FCF 原值为美元 (港股为港币), 大数用 B (十亿) 缩写
+        function bn(v) {{
+          if (v == null || !isFinite(v)) return 'n/a';
+          const abs = Math.abs(v);
+          if (abs >= 1e9)  return (v/1e9).toFixed(2) + 'B';
+          if (abs >= 1e6)  return (v/1e6).toFixed(2) + 'M';
+          return v.toFixed(2);
+        }}
+        function cagrLabel(cg, N) {{
+          if (cg == null) return `N/A (数据不足 ${{N*4}} 期)`;
+          if (cg.nm) {{
+            // 明确告诉用户是哪个端点为负 -> 触发 n/m
+            if (cg.nmReason === 'now')  return `n/m (当前 TTM = ${{bn(cg.now)}} ≤ 0)`;
+            if (cg.nmReason === 'then') return `n/m (${{N}}Y 前那期 = ${{bn(cg.then)}} ≤ 0)`;
+            return `n/m (两端均 ≤ 0: now=${{bn(cg.now)}}, ${{N}}Y前=${{bn(cg.then)}})`;
+          }}
+          const pct = (cg.cagr >= 0 ? '+' : '') + (cg.cagr * 100).toFixed(1) + '%';
+          return `${{pct}}  (${{bn(cg.then)}} → ${{bn(cg.now)}})`;
+        }}
+        // 5Y 实际跨度 4.75 年 (19 个季度), 在 tooltip 里如实标注
+        const actualTip =
+            `Past FCF CAGR — 端点法\n`
+          + `公式:  CAGR = (FCF₀ / FCF₋ₙ)^(1/N) − 1\n`
+          + `采样:  季度 TTM 序列, 首值 = 最新, 尾值 = N 年前那个季度\n`
+          + `        1Y ← series[4]   (4 季度前)\n`
+          + `        3Y ← series[12]  (12 季度前)\n`
+          + `        5Y ← series[19]  (19 季度前 ≈ 4.75 年)\n`
+          + `\n`
+          + `  1y: ${{cagrLabel(cagr1, 1)}}\n`
+          + `  3y: ${{cagrLabel(cagr3, 3)}}\n`
+          + `  5y: ${{cagrLabel(cagr5, 5)}}\n`
+          + `\n`
+          + `n/m: 端点 ≤ 0 时 CAGR 几何无意义 (跨零点)\n`
+          + `N/A: 季度 TTM 序列长度不足`;
+
+        // 构造完整行列表: 常规整数档 + 可能的 actual 插值行
+        // Actual g 处理策略:
+        //   1) CAGR ∈ (0%, 10%) 相邻两档之间       → 插入 mid 位置
+        //   2) CAGR 几乎等于某整数档 (差 <0.05pp)   → 不新增行, 标记该整数档 hit
+        //   3) CAGR ≥ 10%  (超上限, 含正好 10%)     → 在顶部 g=10% 行之上插入 (Y 轴向上延伸)
+        //   4) CAGR ≤ 0%   (超下限, 含 0% 与负数)   → 在底部 g=0% 行之下插入 (Y 轴向下延伸)
+        //   5) n/m 或 N/A                            → 完全不插入, 不标 hit
+        let actualG = null;                          // 需要作为独立行插入的 CAGR (含超界)
+        let actualPos = null;                        // 'top' | 'bottom' | 'mid'
+        let hitInteger = null;                       // 若 CAGR 恰等于某整数档, 记录该 g
+        if (cagrCur && !cagrCur.nm && isFinite(cagrCur.cagr)) {{
+          const c = cagrCur.cagr;
+          // 先检查是否几乎等于某整数档 (容差 0.05pp)
+          let snapped = null;
+          for (const g of DCF_G_LIST) {{
+            if (Math.abs(g - c) < 0.0005) {{ snapped = g; break; }}
+          }}
+          if (snapped != null) {{
+            hitInteger = snapped;                    // 情况 2
+          }} else if (c > 0 && c < 0.10) {{
+            actualG = c; actualPos = 'mid';          // 情况 1
+          }} else if (c >= 0.10) {{
+            actualG = c; actualPos = 'top';          // 情况 3
+          }} else {{
+            actualG = c; actualPos = 'bottom';       // 情况 4 (c ≤ 0)
+          }}
+        }}
+        // 按 g 从高到低排列 DCF_G_LIST (0.10 → 0.00), 按 actualPos 决定在何处插入独立行
+        const rows = [];
+        // top: 插在最顶
+        if (actualG != null && actualPos === 'top') {{
+          rows.push({{ g: actualG, isActual: true, outOfRange: 'above' }});
+        }}
+        for (let i = 0; i < DCF_G_LIST.length; i++) {{
+          const g = DCF_G_LIST[i];
+          rows.push({{
+            g,
+            isActual: false,
+            isHit: hitInteger != null && Math.abs(g - hitInteger) < 1e-9,
+          }});
+          // mid: 若 actualG 落在当前 g 和下一个 g 之间 (g > actualG > nextG), 紧接着插入
+          if (actualG != null && actualPos === 'mid' && i + 1 < DCF_G_LIST.length) {{
+            const nextG = DCF_G_LIST[i + 1];
+            if (g > actualG && actualG > nextG) {{
+              rows.push({{ g: actualG, isActual: true }});
+            }}
+          }}
+        }}
+        // bottom: 插在最底
+        if (actualG != null && actualPos === 'bottom') {{
+          rows.push({{ g: actualG, isActual: true, outOfRange: 'below' }});
+        }}
+
+        // 生成网格 HTML
+        // 表头: 空角 + WACC 数据列 (Actual g 参考列已并入 Y 轴刻度, 不再单独占列)
+        let html = `<table class="dcf-heatmap">`
+                 + `<thead><tr><th class="corner"><span class="arrow">g ↓ / WACC →</span></th>`;
+        for (const w of DCF_WACC_LIST) {{
+          html += `<th>${{(w*100).toFixed(0)}}%</th>`;
+        }}
+        html += `</tr></thead><tbody>`;
+
+        // 中位格 (WACC=8% + g=中位 5%) 供 footer 用
+        let midFV = null;
+        for (const row of rows) {{
+          const g = row.g;
+          // 行头 g 值: 插值行显示一位小数 (带箭头), 整数档显示整数
+          let gHeadTxt;
+          if (row.isActual) {{
+            const num = (g*100).toFixed(1) + '%';
+            if (row.outOfRange === 'above')      gHeadTxt = '↑ ' + num;
+            else if (row.outOfRange === 'below') gHeadTxt = '↓ ' + num;
+            else                                 gHeadTxt = num;
+          }} else {{
+            gHeadTxt = (g*100).toFixed(0) + '%';
+          }}
+          const trClsList = [];
+          if (row.isActual)     trClsList.push('actual-row');
+          if (row.outOfRange)   trClsList.push('out-of-range');
+          const trCls = trClsList.length ? ` class="${{trClsList.join(' ')}}"` : '';
+          // 行头 g 值本身即承担了历史 CAGR 的可读性 (插值行/hit 行由 CSS 高亮), 无需额外参考列
+          // 仅在 actual/hit 行的行头挂 CAGR 三档 tooltip
+          const thTip = (row.isActual || row.isHit)
+            ? ` title="${{actualTip.replace(/"/g,'&quot;')}}"` : '';
+          html += `<tr${{trCls}}><th${{thTip}}>${{gHeadTxt}}</th>`;
+          for (const w of DCF_WACC_LIST) {{
+            const fv = dcfPerShare(fcf0, g, w, G, N, shares, netDebt);
+            if (fv == null) {{
+              html += `<td class="hm err" title="WACC ≤ G, terminal value undefined">—</td>`;
+            }} else {{
+              const up = upsidePct(fv, price);
+              const bg = upsideToColor(up);
+              const upTxt = (up == null || !isFinite(up)) ? 'N/A'
+                          : (up >= 0 ? '+' : '') + up.toFixed(0) + '%';
+              const gLabel = row.isActual ? (g*100).toFixed(1) : (g*100).toFixed(0);
+              // Actual 后缀: mid 简写 "actual past Ny", 超界额外说明
+              let actualSuffix = '';
+              if (row.isActual) {{
+                if      (row.outOfRange === 'above') actualSuffix = ` (actual past ${{N}}y, above grid)`;
+                else if (row.outOfRange === 'below') actualSuffix = ` (actual past ${{N}}y, below grid)`;
+                else                                  actualSuffix = ` (actual past ${{N}}y)`;
+              }}
+              const tip = `WACC=${{(w*100).toFixed(0)}}%, g=${{gLabel}}%${{actualSuffix}}, G=${{gPct.toFixed(1)}}%, N=${{N}}y\nFair value: ${{fmtMoney(fv)}}\nCurrent:    ${{fmtMoney(price)}}\nUpside:     ${{upTxt}}${{row.outOfRange ? '\\n\\n⚠ 此行 g 超出常规网格 [0%, 10%], 仅供参考' : ''}}`;
+              html += `<td class="hm" style="background:${{bg}}" title="${{tip}}">${{upTxt}}</td>`;
+              // 记录中位 (WACC=8%, g=5%) — 只从整数档取
+              if (!row.isActual && w === 0.08 && Math.abs(g - 0.05) < 1e-9) midFV = fv;
+            }}
+          }}
+          html += `</tr>`;
+        }}
+        html += `</tbody></table>`;
+
+        const wrap = cardEl.querySelector('.dcf-heatmap-wrap');
+        if (wrap) wrap.innerHTML = html;
+
+        // Footer: 中位 (WACC=8%, g=5%) 的公允价与 upside + 历史 CAGR 摘要
+        const footer = cardEl.querySelector('.dcf-footer');
+        if (footer) {{
+          const upMid = upsidePct(midFV, price);
+          // 高亮当前 N 对应的档; 副行显示端点数值 (FCF₋ₙ → FCF₀), 便于验证 CAGR 来源
+          // 颜色语义: cagr >= 0 → 绿 (pos), cagr < 0 → 红 (neg, 真·负增长, 两端点都>0);
+          //          n/m 保持 muted 灰 (端点 ≤ 0, 几何无意义)
+          function cagrChip(label, cg, N, isCur) {{
+            // 主行: 百分比 (或 n/m / N/A) — 保持紧凑
+            let head;
+            let sign = 'nm';                        // 'pos' | 'neg' | 'nm' (na/nm 走 nm 分支保持灰色)
+            if (cg == null) {{
+              head = 'N/A';
+            }} else if (cg.nm) {{
+              head = 'n/m';
+            }} else {{
+              head = (cg.cagr >= 0 ? '+' : '') + (cg.cagr * 100).toFixed(1) + '%';
+              sign = cg.cagr >= 0 ? 'pos' : 'neg';  // 真·负增长 → 红色
+            }}
+            // 副行: 端点数值 then → now (nm 时也显示, 让用户看到跨零具体位置)
+            // 当前档 (isCur) 且 sign 有色时高亮同色, 让用户一眼锁定"当前 N"档且看到方向
+            let sub = '';
+            if (cg != null) {{
+              const epCls = (isCur && sign !== 'nm')
+                ? `dcf-cagr-endpoints ${{sign}}`
+                : 'dcf-cagr-endpoints';
+              sub = `<span class="${{epCls}}">${{bn(cg.then)}} → ${{bn(cg.now)}}</span>`;
+            }}
+            // 百分比着色: 当前档 pos/neg 走绿/红, 其他档保持 muted
+            const cls = (isCur && sign !== 'nm') ? `dcf-upside ${{sign}}` : '';
+            const style = isCur ? '' : 'color:var(--muted)';
+            // 挂 title 兜底一层, hover 时看到完整算式
+            const tip = (cg == null)
+              ? `${{N}}y: 数据不足 ${{N*4}} 期`
+              : (cg.nm
+                  ? `${{N}}y: n/m — ${{cg.nmReason==='now' ? '当前 TTM ≤ 0' : cg.nmReason==='then' ? `${{N}}Y 前那期 ≤ 0` : '两端均 ≤ 0'}} (then=${{bn(cg.then)}}, now=${{bn(cg.now)}})`
+                  : `${{N}}y CAGR = (${{bn(cg.now)}} / ${{bn(cg.then)}})^(1/${{N}}) − 1 = ${{(cg.cagr*100).toFixed(2)}}%`);
+            const chipCls = isCur ? 'dcf-cagr-chip current' : 'dcf-cagr-chip';
+            return `<span class="${{chipCls}}" style="${{style}}" title="${{tip.replace(/"/g,'&quot;')}}">`
+                 +   `<span class="dcf-cagr-label">${{label}}</span> <span class="${{cls}}">${{head}}</span>`
+                 +   sub
+                 + `</span>`;
+          }}
+          footer.innerHTML =
+              `<span>Mid (W=8%, g=5%, G=${{gPct.toFixed(1)}}%, N=${{N}}y): `
+            +   `<b>${{fmtMoney(midFV)}}</b> · ${{upsideSpan(upMid)}}</span>`
+            + `<span>Current: <b>${{fmtMoney(price)}}</b></span>`
+            + `<span style="width:100%;height:0"></span>`
+            + `<span style="color:var(--muted)">Actual FCF CAGR:</span>`
+            + cagrChip('1y', cagr1, 1, N===1)
+            + cagrChip('3y', cagr3, 3, N===3)
+            + cagrChip('5y', cagr5, 5, N===5);
+        }}
+      }}
+
+      // 触发所有已渲染 DCF 卡的重算 (滑块变动 / range 切换)
+      function dcfRecomputeAll() {{
+        const N = N_MAP[currentRange] || 5;
+        document.querySelectorAll('.dcf-card[data-ticker]').forEach(el => {{
+          dcfRecomputeCard(el, N);
+        }});
+      }}
+
       function renderDcfTab() {{
         titleE.textContent = METRIC_META.dcf.title;
 
         // 空选中集合: 与其他 Tab 行为一致——关闭悬浮面板, 让 Close 按钮生效。
-        // (原实现无条件 panel.add('open') + 塞提示卡, 会导致 Close 按钮点了也关不掉。)
         if (selected.size === 0) {{
           panel.classList.remove('open');
           panel.setAttribute('aria-hidden', 'true');
@@ -2554,7 +2962,6 @@ _HTML_TEMPLATE = """<!doctype html>
           legendE.innerHTML = '';
           selectedE.innerHTML = '';
           if (formulaE) {{ formulaE.classList.remove('show'); formulaE.innerHTML = ''; }}
-          // 同步徽章选中态（全部取消）
           document.querySelectorAll('.tk-badge').forEach(b => {{
             b.classList.remove('selected');
             b.style.removeProperty('--sel');
@@ -2565,60 +2972,78 @@ _HTML_TEMPLATE = """<!doctype html>
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
 
-        // 副标题: 明确标注两个数据源 + 抓取时间
-        let asof = null;
-        for (const t of selected.keys()) {{
-          const d = DCF_DATA[t];
-          if (d && d.fmp && d.fmp.asof) {{ asof = d.fmp.asof; break; }}
-        }}
-        subE.textContent =
-          `Fair value snapshot from two independent sources` +
-          ` · FMP DCF model + stockanalysis analyst consensus` +
-          (asof ? ` · as of ${{asof}}` : '');
-
-        {{
-          // 每选中一个 ticker 渲染一张卡
-          const cards = Array.from(selected.keys()).map(renderDcfCard).join('');
-          body.innerHTML = `<div class="dcf-grid">${{cards}}</div>`;
-          legendE.innerHTML = '';
-          selectedE.innerHTML = Array.from(selected.entries()).map(([t, c]) =>
-            `<span class="sel-chip" style="border-color:${{c}};color:${{c}}">${{logoImg(t)}}<span class="tk-sym">${{t}}</span></span>`
-          ).join('');
-        }}
-
-        // 说明条: 讲清楚两个数据源各自"是什么、来自哪里、有什么局限"。
-        formulaE.classList.add('show');
-        formulaE.innerHTML =
-          `<span class="cf-tag">METHOD</span>` +
-          `本 Tab 展示两个 <b>相互独立</b> 的公允价值参考, 不做互相校准, 也不作平均, ` +
-          `留给读者自行对比. 两个来源的方法论差异较大, 结论常常并不一致——` +
-          `这本身就是有信息量的.` +
-          `<br/><br/>` +
-          `<span class="cf-tag">SOURCE A · FMP · DCF Model</span>` +
-          `<b>financialmodelingprep.com</b> 的 <code>/stable/discounted-cash-flow</code> endpoint, ` +
-          `使用其 <b>内部黑盒 DCF 模型</b> (WACC / 永续增长率 / FCF 预测均由 FMP 自行确定, 免费 tier 不公开假设) ` +
-          `给出一个单值 Fair Value. 额外调用 <code>/stable/levered-discounted-cash-flow</code> ` +
-          `作为对照, 后者考虑了债务与资本结构对权益价值的影响.` +
-          `<br/><br/>` +
-          `<span class="cf-tag">SOURCE B · Analyst Consensus</span>` +
-          `<b>stockanalysis.com</b> 的 forecast 页, 汇总多家投行分析师对该股 <b>未来 12 个月</b> ` +
-          `目标价的共识 (average / low / high) 及推荐评级分布 (Buy / Hold / Sell), ` +
-          `底层数据源标注为 S&amp;P Global Market Intelligence + TipRanks. ` +
-          `另附本财年 / 下财年的 Revenue 和 EPS 预测.` +
-          `<br/><br/>` +
-          `<span class="cf-tag">CAVEAT</span>` +
-          `<b>两个来源都是当前时点快照</b>, 不做历史序列 (回测无信息价值, 详见 P/E Tab). ` +
-          `<b>不做分年拆解</b>——FMP 免费 tier 已停用逐年 FCF endpoint, stockanalysis 分年 FV 位于付费墙后, ` +
-          `因此 1Y / 3Y / 5Y range 按钮在此 Tab 隐藏. ` +
-          `所有数字 <b>仅供参考</b>, 不构成投资建议. ETF 组合层面无 DCF 概念, Tab 会自动隐藏.`;
-
-        // 更新徽章选中态 (与 render() 里的逻辑一致)
+        // 徽章选中态: 前置到任何内容渲染之前, 保证即使后续 DCF 网格出错也不影响高亮。
         document.querySelectorAll('.tk-badge').forEach(b => {{
           const t = b.dataset.ticker;
           b.classList.toggle('selected', selected.has(t));
           if (selected.has(t)) b.style.setProperty('--sel', selected.get(t));
           else b.style.removeProperty('--sel');
         }});
+
+        // 副标题: 数据源 + 抓取时间 (取任一 ticker 的 asof)
+        let asof = null;
+        for (const t of selected.keys()) {{
+          const d = DCF_DATA[t];
+          if (d && d.asof) {{ asof = d.asof; break; }}
+        }}
+        const N = N_MAP[currentRange] || 5;
+        subE.textContent =
+          `Two-stage DCF sensitivity · WACC × g heatmap` +
+          ` · N=${{N}} explicit years · FCF₀ from stockanalysis.com TTM` +
+          (asof ? ` · ${{asof}}` : '');
+
+        // 渲染每张卡骨架, 然后统一触发重算填充网格
+        const cards = Array.from(selected.keys()).map(renderDcfCard).join('');
+        body.innerHTML = `<div class="dcf-grid">${{cards}}</div>`;
+        legendE.innerHTML = '';
+        selectedE.innerHTML = Array.from(selected.entries()).map(([t, c]) =>
+          `<span class="sel-chip" style="border-color:${{c}};color:${{c}}">${{logoImg(t)}}<span class="tk-sym">${{t}}</span></span>`
+        ).join('');
+
+        // 绑定每张卡的滑块 input 事件 → 只重算这张卡 (不重画其他)
+        body.querySelectorAll('.dcf-card[data-ticker]').forEach(el => {{
+          const slider = el.querySelector('.dcf-g-slider');
+          if (slider) {{
+            slider.addEventListener('input', () => {{
+              dcfRecomputeCard(el, N_MAP[currentRange] || 5);
+            }});
+          }}
+        }});
+
+        // 首次填充所有网格
+        dcfRecomputeAll();
+
+        // 说明条: 精简版, 只保留核心公式 / 图表读法 / 数据来源与关键局限
+        formulaE.classList.add('show');
+        formulaE.innerHTML =
+          `<span class="cf-tag">MODEL</span>` +
+          `<b>两阶段 DCF</b>: 显式期 N 年内 FCF 按 g 复合增长, 之后按永续增长率 G 增长.` +
+          `<br/><code>V = Σ FCF₀·(1+g)ᵗ/(1+WACC)ᵗ + [FCF_N·(1+G)/(WACC−G)]/(1+WACC)ᴺ</code>` +
+          `<br/>每股公允价 = (V − Net Debt) / Shares. WACC ≤ G 时终值发散, 显示 —.` +
+          `<br/><br/>` +
+          `<span class="cf-tag">GRID</span>` +
+          `<b>X 轴 WACC</b> 5%→10%, <b>Y 轴 g</b> 0%→10%, 每格显示 <b>Upside% = (FV − 现价)/现价</b> ` +
+          `(绿=低估, 红=高估, 与主表 strong/weak 同源). 悬停看绝对公允价.` +
+          `<br/>` +
+          `<b>历史 CAGR</b> (过去 N 年 FCF 复合增速) 直接插入 Y 轴对应位置: ` +
+          `∈(0%,10%) 插入两档之间; ≈整数档标 <b>hit</b>; 超 10% 置顶↑, ≤0% 置底↓ (虚线边框, 仅供参考); ` +
+          `FCF 跨零点为 <b>n/m</b> 不插入. 悬停行头看 1Y/3Y/5Y 三档 + 计算方法.` +
+          `<br/><br/>` +
+          `<span class="cf-tag">METHOD · CAGR</span>` +
+          `<b>端点法</b>: <code>CAGR = (FCF₀ / FCF₋ₙ)^(1/N) − 1</code>. ` +
+          `采样自 stockanalysis 季度 TTM 序列, 只看首尾两点: ` +
+          `<b>1Y</b> 取 4 季度前, <b>3Y</b> 取 12 季度前, <b>5Y</b> 取 19 季度前 (≈ 4.75 年, 近似当 5 年). ` +
+          `<b>n/m</b> 触发条件: 任一端点 FCF ≤ 0 (跨零点 CAGR 无几何意义), tooltip 会指明是当前 TTM 还是 N 年前那期为负. ` +
+          `<b>N/A</b>: 数据源仅返回少于 N·4 个季度. ` +
+          `<i>局限</i>: 端点法对采样时点敏感, 单个季度极端值会明显放大/压低结果 — 仅作参考锚点, 不代表未来。` +
+          `<br/><br/>` +
+          `<span class="cf-tag">CONTROLS</span>` +
+          `顶部 <b>1Y/3Y/5Y</b> = 显式预测期 N; 滑块 <b>G ∈ [0%, 5%]</b> = 永续增长率 (默认 2.5%, ~名义通胀).` +
+          `<br/><br/>` +
+          `<span class="cf-tag">DATA & LIMITS</span>` +
+          `FCF₀ 来自 stockanalysis.com TTM 现金流表; 股本 / 债务 / 现金 / 现价来自本报告主表快照. ` +
+          `本网格是<b>假设驱动的 what-if</b>, 不是历史序列 (那是 P/E Tab). ` +
+          `FCF ≤ 0 时全表为负数不代表被高估; ETF 无 DCF, Tab 自动隐藏. 仅供参考, 不构成投资建议.`;
       }}
 
       function render() {{
@@ -2631,10 +3056,9 @@ _HTML_TEMPLATE = """<!doctype html>
         const rmeta   = RANGE_META[currentRange];
         titleE.textContent = meta.title;
 
-        // DCF Tab: 双 panel 视图 (方案 C)。range 按钮已通过 syncRangeGroupVisibility 隐藏,
-        // 因为两个数据源 (FMP 单值 + stockanalysis 分析师共识) 都不提供分年拆解。
-        // 每个选中的 ticker 渲染一张卡, 卡内并列 FMP DCF Model 与 Analyst Consensus 两个 panel,
-        // 各自标注独立的数据来源链接。
+        // DCF Tab: 自建两阶段 DCF 敏感性网格 (WACC × g 热图 + 永续增长率 G 滑块)。
+        // range 按钮语义在此 Tab 下变为"显式预测期年数 N" (1Y=1, 3Y=3, 5Y=5)。
+        // 每个选中的 ticker 一张卡: 参数条 + 滑块 + WACC×g 网格 + 底部 mid 小结。
         if (currentMetric === 'dcf') {{
           renderDcfTab();
           return;
@@ -2987,31 +3411,37 @@ _HTML_TEMPLATE = """<!doctype html>
       }});
       window.addEventListener('resize', () => {{ if (selected.size) render(); }});
 
-      // ---- 给 ETF 的 "P/E (Fwd)" 单元格追加数据源 tooltip ----
-      // 先按表头文本定位 "P/E (Fwd)" 列的索引（每个 section 表头可能相同, 但保险起见按表逐个定位）,
-      // 再对 tbody 里每一行匹配 data-ticker, 命中 FWD_SOURCE 就写 title 属性 + 加视觉提示 class。
-      (function annotateFwdSource() {{
-        if (!FWD_SOURCE || Object.keys(FWD_SOURCE).length === 0) return;
+      // ---- 给指定列的单元格追加数据源 tooltip ----
+      // 按表头文本定位目标列, 再对每行 data-ticker 查 sourceMap, 命中就写 title + 加视觉提示 class.
+      // 当前用于四列: EPS Growth (3-5Y Est) / ROE / P/E (TTM) / P/E (Fwd).
+      // 三列 ETF 专属 (EPS Growth / ROE / P/E Fwd), P/E (TTM) 个股 + ETF 都有.
+      function annotateColSource(headerText, sourceMap) {{
+        if (!sourceMap || Object.keys(sourceMap).length === 0) return;
         document.querySelectorAll('table').forEach(tbl => {{
           const ths = tbl.querySelectorAll('thead th');
-          let fwdIdx = -1;
+          let colIdx = -1;
           ths.forEach((th, i) => {{
-            // 表头是 "P/E&nbsp;(Fwd)" -> textContent 变成 "P/E (Fwd)"
+            // 表头里 &nbsp; -> textContent 里表现为空格, 统一压缩空白再对比
             const txt = (th.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (txt === 'P/E (Fwd)') fwdIdx = i;
+            if (txt === headerText) colIdx = i;
           }});
-          if (fwdIdx < 0) return;
+          if (colIdx < 0) return;
           tbl.querySelectorAll('tbody tr[data-ticker]').forEach(tr => {{
             const sym = tr.getAttribute('data-ticker');
-            const label = FWD_SOURCE[sym];
+            const label = sourceMap[sym];
             if (!label) return;
-            const cell = tr.children[fwdIdx];
+            const cell = tr.children[colIdx];
             if (!cell) return;
+            // 避免重复挂载 (每列独立, 不会互相覆盖 title)
             cell.setAttribute('title', 'Source: ' + label);
             cell.classList.add('has-src');
           }});
         }});
-      }})();
+      }}
+      annotateColSource('P/E (Fwd)',              FWD_SOURCE);
+      annotateColSource('P/E (TTM)',              PE_TTM_SOURCE);
+      annotateColSource('EPS Growth (3-5Y Est)',  EPS_GROWTH_SOURCE);
+      annotateColSource('ROE',                    ROE_SOURCE);
     }})();
   </script>
 </body>
@@ -3060,6 +3490,12 @@ def build_html_report(
     pe_source: dict[str, str] = {}
     # ticker -> Forward P/E 数据源标签（仅 ETF 有值, 表格 P/E (Fwd) 单元格 title tooltip）
     fwd_source: dict[str, str] = {}
+    # ticker -> P/E (TTM) 单元格数据源标签 (个股默认 stockanalysis Statistics, ETF 走 /etf/{t}/)
+    pe_ttm_source: dict[str, str] = {}
+    # ticker -> EPS Growth (3-5Y Est) 单元格数据源标签 (仅 ETF)
+    eps_growth_source: dict[str, str] = {}
+    # ticker -> ROE 单元格数据源标签 (仅 ETF)
+    roe_source: dict[str, str] = {}
     for _title, rows, _cur in sections:
         for r in rows:
             if r.pe_history:
@@ -3082,6 +3518,18 @@ def build_html_report(
             # Forward P/E 数据源 (仅 ETF, 个股不额外标注)
             if r.pe_forward_source:
                 fwd_source[r.symbol] = r.pe_forward_source
+            # ---- 单元格级数据源 tooltip (P/E TTM / EPS Growth / ROE) ----
+            # 优先用 Row 里显式设置的 label; 没有则用兜底文案:
+            #   - P/E (TTM): 个股 stockanalysis Statistics, ETF /etf/{t}/ (在 _fetch_etf 里已写入)
+            #   - EPS Growth / ROE: 只有 ETF 有值, 由 _fetch_etf 写入; 个股不标注
+            if r.pe_ttm_source:
+                pe_ttm_source[r.symbol] = r.pe_ttm_source
+            elif r.data.get(FIELDS["pe"]):
+                pe_ttm_source[r.symbol] = "stockanalysis.com · Statistics (TTM)"
+            if r.eps_growth_source:
+                eps_growth_source[r.symbol] = r.eps_growth_source
+            if r.roe_source:
+                roe_source[r.symbol] = r.roe_source
     pe_5y_json = json.dumps(pe_5y, ensure_ascii=False)
     ev_5y_json = json.dumps(ev_5y, ensure_ascii=False)
     pe_3y_json = json.dumps(pe_3y, ensure_ascii=False)
@@ -3090,6 +3538,9 @@ def build_html_report(
     ev_1y_json = json.dumps(ev_1y, ensure_ascii=False)
     pe_source_json = json.dumps(pe_source, ensure_ascii=False)
     fwd_source_json = json.dumps(fwd_source, ensure_ascii=False)
+    pe_ttm_source_json = json.dumps(pe_ttm_source, ensure_ascii=False)
+    eps_growth_source_json = json.dumps(eps_growth_source, ensure_ascii=False)
+    roe_source_json = json.dumps(roe_source, ensure_ascii=False)
     logo_map_json = json.dumps(LOGO_DOMAIN, ensure_ascii=False)
     # ETF 集合注入前端, 用于动态隐藏对 ETF 无意义的 Tab (EV/EBIT / DCF)。
     etf_set_json = json.dumps([t.upper() for t in ETFs], ensure_ascii=False)
@@ -3150,6 +3601,8 @@ def build_html_report(
             cash    = _to_float(r.data.get(FIELDS["totalcash"]))
             mcap    = _to_float(r.data.get(FIELDS["marketcap"]))
             evv     = _to_float(r.data.get(FIELDS["enterpriseValue"]))
+            eps_g   = _to_float(r.data.get(FIELDS["epsGrowth3To5Y"]))
+            roe     = _to_float(r.data.get(FIELDS["returnOnEquity"]))
             shares  = (mcap / close) if (mcap and close) else None
             tickers_data[r.symbol] = {
                 "section": _title,
@@ -3167,6 +3620,11 @@ def build_html_report(
                 "market_cap": mcap,
                 "enterprise_value": evv,
                 "shares_out": shares,
+                # ETF 专用字段 (个股为 None): 发行商官方加权口径.
+                # eps_growth_3_5y 单位是百分比 (18.43 表示 18.43%);
+                # roe 同理 (34.79 表示 34.79%).
+                "eps_growth_3_5y": eps_g,
+                "roe": roe,
                 "pe_history_source": r.pe_history_source,
                 "pe_forward_source": r.pe_forward_source,
                 # 曲线保留 5Y 全量 (3Y/1Y 都是它的尾部切片, 冗余不必存);
@@ -3203,6 +3661,9 @@ def build_html_report(
         ev_1y_json=ev_1y_json,
         pe_source_json=pe_source_json,
         fwd_source_json=fwd_source_json,
+        pe_ttm_source_json=pe_ttm_source_json,
+        eps_growth_source_json=eps_growth_source_json,
+        roe_source_json=roe_source_json,
         logo_map_json=logo_map_json,
         etf_set_json=etf_set_json,
         snapshot_json=snapshot_json,
