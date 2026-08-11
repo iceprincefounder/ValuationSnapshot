@@ -72,6 +72,7 @@ USStocks = [
     "GOOGL",   # Alphabet：stockanalysis 已提供公司整体 EV/EBIT，用 GOOGL 或 GOOG 都一样
     "AMZN",
     "META",
+    "BRK.B",   # Berkshire Hathaway Class B (stockanalysis URL 路径为 /stocks/brk.b/)
     "KO",      # Coca-Cola
     "PG",      # Procter & Gamble
     "JNJ",     # Johnson & Johnson
@@ -86,6 +87,7 @@ HKStocks = [
     "9618",    # JD.com
     "9992",    # Pop Mart International
     "1211",    # BYD Company
+    "9633",    # Nongfu Spring (农夫山泉)
     # "3750",  # CATL - Contemporary Amperex Technology (H-shares, listed May 2025)
                #        stockanalysis 目前只有 overview 页, statistics/financials/ratios 全部 404,
                #        暂无法抓取估值字段, 待数据源上线后启用。
@@ -169,6 +171,7 @@ LOGO_DOMAIN: dict[str, str] = {
     "GOOGL": "abc.xyz",
     "AMZN":  "amazon.com",
     "META":  "meta.com",
+    "BRK.B": "berkshirehathaway.com",
     "KO":    "coca-colacompany.com",
     "PG":    "pg.com",
     "JNJ":   "jnj.com",
@@ -180,6 +183,7 @@ LOGO_DOMAIN: dict[str, str] = {
     "9618":  "jd.com",
     "9992":  "popmart.com",
     "1211":  "byd.com",
+    "9633":  "nongfuspring.com",
     # ETFs
     "VUG":   "vanguard.com",
     "QQQM":  "invesco.com",
@@ -241,8 +245,8 @@ class Row:
     pe_forward_source: str | None = None
     # 以下三项是"表格单元格级"的数据源署名, 用于给对应列的 <td> 添加 title tooltip。
     # 与 pe_history_source (曲线数据源) / pe_forward_source (前瞻 PE 数据源) 平级独立:
-    #   - pe_ttm_source        : P/E (TTM) 单元格的数据源 (ETF 全部走 stockanalysis /etf/{t}/;
-    #                            个股由 stockanalysis /statistics/ 页直接给出, 通用标签)
+    #   - pe_ttm_source        : P/E (TTM) 单元格的数据源 (仅 ETF 标注, 走 stockanalysis /etf/{t}/;
+    #                            个股不标注, 口径统一走 stockanalysis statistics 页, 无需重复署名)
     #   - eps_growth_source    : EPS Growth (3-5Y Est) 单元格的数据源 (仅 ETF, 个股无此列)
     #   - roe_source           : ROE 单元格的数据源 (仅 ETF, 个股无此列)
     pe_ttm_source: str | None = None
@@ -2586,12 +2590,19 @@ _HTML_TEMPLATE = """<!doctype html>
         return `<span class="dcf-upside ${{cls}}">${{sig}}${{up.toFixed(1)}}%</span>`;
       }}
 
-      // 两阶段 DCF: 返回 EV (企业价值)。terminal 无解时返回 null。
+      // 两阶段 DCF: 返回 breakdown 对象 (供 tooltip 展示明细). terminal 无解时返回 null.
       //   fcf0: 基期自由现金流 (美元原值)
       //   g:    显式预测期年增速
       //   wacc: 折现率
       //   G:    永续增长率
       //   N:    显式预测期年数
+      // 返回:
+      //   {{ ev, pv, tvPV, fcfN, tvAtN }}
+      //     ev    = pv + tvPV              (企业价值)
+      //     pv    = Σ FCF_t / (1+wacc)^t   (显式期 PV, t=1..N)
+      //     tvAtN = FCF_N·(1+G) / (wacc-G) (第 N 年时点的 Gordon 终值)
+      //     tvPV  = tvAtN / (1+wacc)^N     (终值折回今天的 PV)
+      //     fcfN  = FCF_0·(1+g)^N          (显式期末年 FCF)
       function dcfEV(fcf0, g, wacc, G, N) {{
         if (fcf0 == null || !isFinite(fcf0)) return null;
         // 显式期折现和
@@ -2603,15 +2614,17 @@ _HTML_TEMPLATE = """<!doctype html>
         }}
         // Gordon 终值 (WACC 必须严格 > G, 否则模型爆炸)
         if (wacc <= G) return null;
-        const tv    = fcfN * (1 + G) / (wacc - G);
-        const tvPV  = tv / Math.pow(1 + wacc, N);
-        return pv + tvPV;
+        const tvAtN = fcfN * (1 + G) / (wacc - G);
+        const tvPV  = tvAtN / Math.pow(1 + wacc, N);
+        return {{ ev: pv + tvPV, pv, tvPV, fcfN, tvAtN }};
       }}
-      // 每股公允价 = (EV - NetDebt) / Shares
+      // 每股公允价 + 明细: 返回 {{ fv, ev, pv, tvPV, fcfN, tvAtN }}; 缺 shares/EV 时返回 null.
+      // 保留 .fv 字段方便调用方直接读单一数值 (与旧接口语义对齐).
       function dcfPerShare(fcf0, g, wacc, G, N, shares, netDebt) {{
-        const ev = dcfEV(fcf0, g, wacc, G, N);
-        if (ev == null || shares == null || !shares) return null;
-        return (ev - (netDebt || 0)) / shares;
+        const bd = dcfEV(fcf0, g, wacc, G, N);
+        if (bd == null || shares == null || !shares) return null;
+        const fv = (bd.ev - (netDebt || 0)) / shares;
+        return {{ fv, ev: bd.ev, pv: bd.pv, tvPV: bd.tvPV, fcfN: bd.fcfN, tvAtN: bd.tvAtN }};
       }}
 
       // 上涨空间百分比 → 颜色 (与全站 strong/weak 图例对齐):
@@ -2839,19 +2852,25 @@ _HTML_TEMPLATE = """<!doctype html>
         let midFV = null;
         for (const row of rows) {{
           const g = row.g;
-          // 行头 g 值: 插值行显示一位小数 (带箭头), 整数档显示整数
+          // 行头 g 值: 插值行显示一位小数 (带箭头), hit 行 (CAGR 正好命中整数档) 加 "= "
+          // 前缀以强调 "此档即历史 CAGR", 避免与普通整数档视觉混淆 (例如 META 5Y CAGR≈3%
+          // 会被 snap 到 3% 档, 若不加视觉标识, Y 轴上根本看不出历史 CAGR 在哪里)。
           let gHeadTxt;
           if (row.isActual) {{
             const num = (g*100).toFixed(1) + '%';
             if (row.outOfRange === 'above')      gHeadTxt = '↑ ' + num;
             else if (row.outOfRange === 'below') gHeadTxt = '↓ ' + num;
             else                                 gHeadTxt = num;
+          }} else if (row.isHit) {{
+            gHeadTxt = '= ' + (g*100).toFixed(0) + '%';
           }} else {{
             gHeadTxt = (g*100).toFixed(0) + '%';
           }}
+          // isHit 行复用 actual-row 样式 (accent 色行头 + 边框), 保证与"插值 actual 行"
+          // 在视觉上一致, 用户一眼即可锁定历史 CAGR 对应档.
           const trClsList = [];
-          if (row.isActual)     trClsList.push('actual-row');
-          if (row.outOfRange)   trClsList.push('out-of-range');
+          if (row.isActual || row.isHit) trClsList.push('actual-row');
+          if (row.outOfRange)            trClsList.push('out-of-range');
           const trCls = trClsList.length ? ` class="${{trClsList.join(' ')}}"` : '';
           // 行头 g 值本身即承担了历史 CAGR 的可读性 (插值行/hit 行由 CSS 高亮), 无需额外参考列
           // 仅在 actual/hit 行的行头挂 CAGR 三档 tooltip
@@ -2859,23 +2878,47 @@ _HTML_TEMPLATE = """<!doctype html>
             ? ` title="${{actualTip.replace(/"/g,'&quot;')}}"` : '';
           html += `<tr${{trCls}}><th${{thTip}}>${{gHeadTxt}}</th>`;
           for (const w of DCF_WACC_LIST) {{
-            const fv = dcfPerShare(fcf0, g, w, G, N, shares, netDebt);
-            if (fv == null) {{
+            const res = dcfPerShare(fcf0, g, w, G, N, shares, netDebt);
+            if (res == null) {{
               html += `<td class="hm err" title="WACC ≤ G, terminal value undefined">—</td>`;
             }} else {{
+              const fv = res.fv;
               const up = upsidePct(fv, price);
               const bg = upsideToColor(up);
               const upTxt = (up == null || !isFinite(up)) ? 'N/A'
                           : (up >= 0 ? '+' : '') + up.toFixed(0) + '%';
               const gLabel = row.isActual ? (g*100).toFixed(1) : (g*100).toFixed(0);
-              // Actual 后缀: mid 简写 "actual past Ny", 超界额外说明
+              // Actual 后缀: mid 简写 "actual past Ny", 超界额外说明; hit 行 (CAGR 命中整数档) 同样标注
               let actualSuffix = '';
               if (row.isActual) {{
                 if      (row.outOfRange === 'above') actualSuffix = ` (actual past ${{N}}y, above grid)`;
                 else if (row.outOfRange === 'below') actualSuffix = ` (actual past ${{N}}y, below grid)`;
                 else                                  actualSuffix = ` (actual past ${{N}}y)`;
+              }} else if (row.isHit) {{
+                actualSuffix = ` (= actual past ${{N}}y)`;
               }}
-              const tip = `WACC=${{(w*100).toFixed(0)}}%, g=${{gLabel}}%${{actualSuffix}}, G=${{gPct.toFixed(1)}}%, N=${{N}}y\nFair value: ${{fmtMoney(fv)}}\nCurrent:    ${{fmtMoney(price)}}\nUpside:     ${{upTxt}}${{row.outOfRange ? '\\n\\n⚠ 此行 g 超出常规网格 [0%, 10%], 仅供参考' : ''}}`;
+              // Breakdown: 显式期 PV / 终值 (第 N 年时点 tvAtN + 折回今日 tvPV) / EV / 每股
+              // 终值占比 = tvPV / ev, 有助于识别"公允价过度依赖遥远未来"的情形.
+              const tvShare = (res.ev > 0) ? (res.tvPV / res.ev * 100) : null;
+              const tvShareTxt = (tvShare == null || !isFinite(tvShare)) ? 'N/A' : tvShare.toFixed(0) + '%';
+              const netDebtTxt = fmtBig(netDebt || 0);
+              const sharesTxt  = fmtBig(shares);
+              const tip = `WACC=${{(w*100).toFixed(0)}}%, g=${{gLabel}}%${{actualSuffix}}, G=${{gPct.toFixed(1)}}%, N=${{N}}y`
+                        + `\n────── Cash Flow ──────`
+                        + `\nFCF₀        ${{fmtBig(fcf0)}}`
+                        + `\nFCF_N       ${{fmtBig(res.fcfN)}}   = FCF₀·(1+g)^N`
+                        + `\n────── Present Value ──────`
+                        + `\n显式期 PV   ${{fmtBig(res.pv)}}   (Σ FCF_t/(1+WACC)^t)`
+                        + `\n终值 @N     ${{fmtBig(res.tvAtN)}}   = FCF_N·(1+G)/(WACC−G)`
+                        + `\n终值 PV     ${{fmtBig(res.tvPV)}}   (占 EV ${{tvShareTxt}})`
+                        + `\n────── Valuation ──────`
+                        + `\nEV          ${{fmtBig(res.ev)}}   = 显式期 PV + 终值 PV`
+                        + `\n− Net Debt  ${{netDebtTxt}}`
+                        + `\n÷ Shares    ${{sharesTxt}}`
+                        + `\nFair value: ${{fmtMoney(fv)}}`
+                        + `\nCurrent:    ${{fmtMoney(price)}}`
+                        + `\nUpside:     ${{upTxt}}`
+                        + (row.outOfRange ? `\n\n⚠ 此行 g 超出常规网格 [0%, 10%], 仅供参考` : '');
               html += `<td class="hm" style="background:${{bg}}" title="${{tip}}">${{upTxt}}</td>`;
               // 记录中位 (WACC=8%, g=5%) — 只从整数档取
               if (!row.isActual && w === 0.08 && Math.abs(g - 0.05) < 1e-9) midFV = fv;
@@ -3490,7 +3533,7 @@ def build_html_report(
     pe_source: dict[str, str] = {}
     # ticker -> Forward P/E 数据源标签（仅 ETF 有值, 表格 P/E (Fwd) 单元格 title tooltip）
     fwd_source: dict[str, str] = {}
-    # ticker -> P/E (TTM) 单元格数据源标签 (个股默认 stockanalysis Statistics, ETF 走 /etf/{t}/)
+    # ticker -> P/E (TTM) 单元格数据源标签 (仅 ETF, 走 stockanalysis /etf/{t}/; 个股不标注)
     pe_ttm_source: dict[str, str] = {}
     # ticker -> EPS Growth (3-5Y Est) 单元格数据源标签 (仅 ETF)
     eps_growth_source: dict[str, str] = {}
@@ -3519,13 +3562,12 @@ def build_html_report(
             if r.pe_forward_source:
                 fwd_source[r.symbol] = r.pe_forward_source
             # ---- 单元格级数据源 tooltip (P/E TTM / EPS Growth / ROE) ----
-            # 优先用 Row 里显式设置的 label; 没有则用兜底文案:
-            #   - P/E (TTM): 个股 stockanalysis Statistics, ETF /etf/{t}/ (在 _fetch_etf 里已写入)
-            #   - EPS Growth / ROE: 只有 ETF 有值, 由 _fetch_etf 写入; 个股不标注
+            # 仅 ETF 需要标注单元格级数据源, 个股不加 tooltip (口径统一走 stockanalysis
+            # statistics 页, 用户已知, 无需在每格重复署名, 避免视觉噪音)。三个 map 均只
+            # 收录 Row 里显式设置了 source label 的 ticker, 而这些 label 只在 _fetch_etf
+            # 内被写入, 因此天然只包含 ETF, 无需再判断 r.symbol 是否属于 ETFs 集合。
             if r.pe_ttm_source:
                 pe_ttm_source[r.symbol] = r.pe_ttm_source
-            elif r.data.get(FIELDS["pe"]):
-                pe_ttm_source[r.symbol] = "stockanalysis.com · Statistics (TTM)"
             if r.eps_growth_source:
                 eps_growth_source[r.symbol] = r.eps_growth_source
             if r.roe_source:
