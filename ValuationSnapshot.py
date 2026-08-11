@@ -3692,18 +3692,12 @@ def _sync_pages(report_path: str) -> None:
       2. 用正则重写 ``Pages/index.html`` 中三处对 report 的引用
          （meta refresh、canonical link、可见备用链接），指向最新那份。
       3. 确保存在空文件 ``Pages/.nojekyll`` （阻止 Pages 用 Jekyll 处理）。
-      4. 把最新那份 HTML 额外复制一份为 ``Pages/latest.html`` （覆盖式），
-         同时把 HTML 内的 ``../logos/`` 引用改写为 ``logos/`` ——因为年份子目录
-         下的报告用 ``../logos/`` 引用 ``Pages/logos/`` (相对上跳一级)，而
-         latest.html 位于 Pages/ 根下需要同级 ``logos/``。
-         用途: 供 CI 上的 Playwright 用固定路径截图, 输出 ``Pages/latest.png``,
-         再由 README.md 以相对路径 ``Pages/latest.png`` 引用。
 
     设计取舍：
       - Pages/index.html 若不存在则跳过重写（首次使用者应先手工放好模板）。
       - 历史 report 保留在 Pages/ 里不清理，旧链接依然可达。
-      - latest.html 是"当日快照的浅拷贝"，不是重定向页, 因为无头浏览器截图时
-        需要真正渲染出内容, meta refresh 页面会截到空壳。
+      - CI 截图脚本 (.github/scripts/screenshot.py) 会自行扫 Pages/<YYYY>/ 下
+        最新的归档 HTML 作为截图源, 无需在此额外产出 latest.html。
     """
     import os, re, shutil
 
@@ -3759,22 +3753,6 @@ def _sync_pages(report_path: str) -> None:
     nojekyll = os.path.join(pages_dir, ".nojekyll")
     if not os.path.exists(nojekyll):
         open(nojekyll, "w", encoding="utf-8").close()
-
-    # 5) 复制当日 HTML 为 Pages/latest.html （覆盖式），供 CI 截图使用
-    # report_path 位于 Pages/<YYYY>/ValuationSnapshot-YYYYMMDD.html;
-    # 目标固定在 Pages/latest.html, 因此需要覆盖同名文件, 并且要把 HTML 内所有对
-    # ``../logos/`` 的引用改写为 ``logos/`` —— 因为年份子目录里的报告需要 ``../logos/``
-    # 才能跳到 Pages/logos/, 而 latest.html 在 Pages/ 根下, 应该用 ``logos/`` 同级引用。
-    latest_path = os.path.join(pages_dir, "latest.html")
-    try:
-        with open(report_path, "r", encoding="utf-8") as f:
-            latest_html = f.read()
-        # 只替换紧跟在 src=" / href=" 之后的 ../logos/ 前缀, 避免误伤注释里的文字
-        latest_html = latest_html.replace('src="../logos/', 'src="logos/')
-        with open(latest_path, "w", encoding="utf-8") as f:
-            f.write(latest_html)
-    except OSError as e:
-        print(f"  !! failed to refresh latest.html: {e}", file=sys.stderr)
 
 
 def main() -> int:

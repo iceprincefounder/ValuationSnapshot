@@ -1,0 +1,57 @@
+# -------- Python bytecode & 编译中间产物 --------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# -------- 打包 / 构建产物 --------
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+MANIFEST
+
+# -------- 测试 / 类型检查 / 覆盖率缓存 --------
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# -------- 虚拟环境 --------
+.venv/
+venv/
+env/
+ENV/
+
+# -------- Jupyter / IPython --------
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# -------- IDE / 编辑器 --------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# -------- 操作系统噪音 --------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------- 本项目相关 --------
+# Pages/ 是发布产物, 需要跟仓库一起发到 GitHub Pages, 不要忽略
+# 但截图脚本的 Playwright 浏览器缓存 / 本地下载不需要
+.playwright/
+playwright-report/

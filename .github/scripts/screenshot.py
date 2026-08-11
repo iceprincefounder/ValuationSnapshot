@@ -1,14 +1,16 @@
-"""用 Playwright headless Chromium 把 ``Pages/latest.html`` 截成 ``Pages/latest.png``。
+"""用 Playwright headless Chromium 把最新一期归档 HTML 截成 ``Pages/latest.png``。
 
 用途:
     仓库的 README.md 里通过相对路径 ``Pages/latest.png`` 引用这张截图, 让访客
-    在 GitHub 首页就能看到“最新一期 ValuationSnapshot 的完整全貌”（表格 +
+    在 GitHub 首页就能看到"最新一期 ValuationSnapshot 的完整全貌"（表格 +
     P/E, P/FCF, EV/EBIT 五年趋势图）。
 
 设计取舍:
-    - 只截 ``Pages/latest.html``（由 ValuationSnapshot.py 每次跑完写入的当日
-      快照浅拷贝）。避开截 ``Pages/index.html``：那是 meta refresh 重定向页,
-      截出来是空壳卡片。
+    - 截图源固定选取 ``Pages/<YYYY>/ValuationSnapshot-YYYYMMDD.html`` 里文件名
+      字典序最大的那一份 (等价于日期最新的一份)。避开截 ``Pages/index.html``:
+      那是 meta refresh 重定向页, 截出来是空壳卡片。
+    - 归档 HTML 里的 logo 用 ``src="../logos/xxx.png"`` 引用 Pages/logos/,
+      用 ``file://`` 协议打开时 Chromium 能正常解析相对路径, 无需额外改写。
     - viewport 底线宽度 1600px, 若页面真实内容更宽则动态扩展到最多 3000px;
       高度用 ``full_page=True`` 自动扩展成长图.
       GitHub README 显示区约 1000px, 1600 给出足够的清晰度余量, 且能容下近期
@@ -35,16 +37,22 @@ def main() -> int:
     # 所以要往上走两级才回到 repo_root
     here = Path(__file__).resolve().parent           # <repo>/.github/scripts
     repo_root = here.parent.parent                    # <repo>
-    src_html = repo_root / "Pages" / "latest.html"
-    dst_png = repo_root / "Pages" / "latest.png"
+    pages_dir = repo_root / "Pages"
+    dst_png = pages_dir / "latest.png"
 
-    if not src_html.exists():
-        print(f"!! source html not found: {src_html}", file=sys.stderr)
+    # 归档命名统一是 ValuationSnapshot-YYYYMMDD.html, 字典序即日期序,
+    # 直接 max() 就能拿到最新那一份, 无需感知 CI 时区 / 数据日期偏移。
+    # 兼容老布局: 极端情况下 Pages/ 根下也可能残留归档, 一并纳入候选。
+    candidates = sorted(pages_dir.glob("*/ValuationSnapshot-*.html")) + \
+                 sorted(pages_dir.glob("ValuationSnapshot-*.html"))
+    if not candidates:
+        print(f"!! no ValuationSnapshot-*.html found under {pages_dir}", file=sys.stderr)
         print("   run `python ValuationSnapshot.py` first to generate it.", file=sys.stderr)
         return 2
+    src_html = max(candidates, key=lambda p: p.name)
 
     try:
-        # 延迟导入, 让“仅仅 --help / 语法检查”不需要装 playwright
+        # 延迟导入, 让"仅仅 --help / 语法检查"不需要装 playwright
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("!! playwright not installed. run `pip install playwright` first.", file=sys.stderr)
