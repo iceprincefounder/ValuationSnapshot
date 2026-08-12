@@ -1309,6 +1309,103 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
         "asof":            asof,
         "source_url":      url,
         "report_currency": report_currency,  # 报表原币 (可能 None)
+        "history_source":  "ttm",       # 历史序列来源: 'ttm' (season/半年/季 TTM) | 'annual' (fallback 到年报)
+    }
+
+
+def _fetch_sa_fcf_annual(ticker: str, market: str) -> dict | None:
+    """抓 stockanalysis 年度现金流表 (不带 ?p=trailing) 的 FCF 序列, 用于 5Y TTM 数据不足时 fallback。
+
+    背景
+    ----
+    _fetch_sa_fcf 抓的 trailing 页对不同披露频率公司返回的点数差异很大:
+      - 美股 / 大部分港股 : 20 个季度点 (覆盖 ~5 年)
+      - 半年报港股         : 10 个半年度点 (覆盖 ~5 年)
+      - 但某些新上市 / 报表体系变化 / 站点数据不全的公司, trailing 页可能只有 1-3 个点,
+        无法算 3Y/5Y CAGR
+    这时回退到年报页 (默认视图) 是最稳的选择 —— 年报页通常提供 10 年历史。
+
+    Returns
+    -------
+    dict | None
+        None: 页面访问失败 / 解析不到年度 fcf。
+        dict: {"fcf_series": [新→旧年度值], "fcf_dates": [YYYY-MM-DD 财年末], "asof": str,
+               "source_url": str, "report_currency": str | None}
+        注意: 不返回 fcf_ttm, 因为年报值不是 TTM 口径 (在 _fetch_dcf 里由 trailing 页值优先填充)。
+    """
+    if market == "ETF":
+        return None
+    if market == "HK":
+        url = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/cash-flow-statement/"
+    else:
+        url = f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/cash-flow-statement/"
+
+    html = _get(url)
+    if not html:
+        print(f"  .. SA FCF annual {ticker}: page not accessible ({url})", file=sys.stderr)
+        return None
+
+    # 与 trailing 页同款正则; 数组顺序也是"新→旧"
+    m = re.search(r'\bfcf\s*:\s*\[([^\]]+)\]', html)
+    if not m:
+        print(f"  !! SA FCF annual {ticker}: 'fcf' array not found", file=sys.stderr)
+        return None
+    md = re.search(r'\bdatekey\s*:\s*\[([^\]]+)\]', html)
+    dates_all: list[str] = re.findall(r'"([^"]+)"', md.group(1)) if md else []
+
+    # 关键: 年报页的 datekey 数组第 0 位通常是字面量 "TTM" (代表最新 TTM 值), 后续才是
+    # "2025-12-31" / "2024-12-31" 这种财年末日期. 我们只保留"能解析为日期"的年度点,
+    # 避免污染前端按 datekey 匹配 N 年前那期的逻辑; TTM 值本身在 _fetch_dcf 里已由
+    # trailing 页负责提供, 这里不需要重复.
+    fcf_series: list[float] = []
+    dates_kept: list[str]   = []
+    for i, p in enumerate([s.strip() for s in m.group(1).split(",")]):
+        if not p or p == "null":
+            continue
+        try:
+            v = float(p)
+        except ValueError:
+            continue
+        # 该点必须有对应的 YYYY-MM-DD 财年末日期, 否则跳过 (含 "TTM" 标签)
+        if i >= len(dates_all):
+            continue
+        dk = dates_all[i]
+        try:
+            dt.date.fromisoformat(dk)
+        except (ValueError, TypeError):
+            continue
+        fcf_series.append(v)
+        dates_kept.append(dk)
+
+    if not fcf_series:
+        print(f"  !! SA FCF annual {ticker}: no valid annual (dated) fcf values", file=sys.stderr)
+        return None
+
+    # 保留最多 10 个年度点 (~10 年), CAGR 只需 6 年就够 (含最新一年 + 5 年前那年)
+    fcf_series = fcf_series[:10]
+    dates_kept = dates_kept[:10]
+
+    asof = None
+    m2 = re.search(r'\bfiscalYear\s*:\s*\[([^\]]+)\]', html)
+    if m2:
+        vals = re.findall(r'"([^"]+)"', m2.group(1))
+        if vals:
+            asof = vals[0]
+
+    report_currency: str | None = None
+    mc = re.search(r'Financials\s+in\s+\w+\s+([A-Z]{3})', html)
+    if mc:
+        report_currency = mc.group(1)
+
+    print(f"  ok SA FCF annual {ticker}: series_len={len(fcf_series)} "
+          f"span={dates_kept[-1] if dates_kept else '?'}→{dates_kept[0] if dates_kept else '?'} "
+          f"{report_currency or '?'}", file=sys.stderr)
+    return {
+        "fcf_series":      fcf_series,
+        "fcf_dates":       dates_kept,
+        "asof":            asof,
+        "source_url":      url,
+        "report_currency": report_currency,
     }
 
 
@@ -1481,6 +1578,41 @@ def _fetch_dcf(ticker: str, market: str, currency: str | None = None) -> dict | 
     fcf = _fetch_sa_fcf(ticker, market)
     if fcf is None:
         return None
+
+    # 5Y 历史 CAGR fallback: 如果 trailing 页拿到的 TTM 序列跨度不足 ~4.5 年
+    # (点数少 或 首尾日期太近), 就再抓年报页作为历史序列替代来源, 保留原 fcf_ttm 不变
+    # (TTM 值口径更真实)。前端 tooltip 会把 history_source 显示为 "年报 (TTM 数据不足)"
+    # 的小字说明, 保证用户可见。
+    ttm_series = fcf.get("fcf_series") or []
+    ttm_dates  = fcf.get("fcf_dates")  or []
+    span_years = 0.0
+    if len(ttm_dates) >= 2:
+        try:
+            d0 = dt.date.fromisoformat(ttm_dates[0])
+            dN = dt.date.fromisoformat(ttm_dates[-1])
+            span_years = (d0 - dN).days / 365.25
+        except (ValueError, TypeError):
+            span_years = 0.0
+    history_source = "ttm"
+    # 判定"不足 5Y": 点数少于 5 或 跨度不到 4.5 年 (5Y CAGR 最少需要 ~4 年真实跨度)
+    if len(ttm_series) < 5 or span_years < 4.5:
+        print(f"  .. {ticker}: TTM series insufficient for 5Y CAGR "
+              f"(len={len(ttm_series)}, span={span_years:.2f}y), trying annual fallback...",
+              file=sys.stderr)
+        ann = _fetch_sa_fcf_annual(ticker, market)
+        if ann and len(ann.get("fcf_series") or []) >= 2:
+            # 只替换历史序列部分, 保留 fcf_ttm/asof 用于卡片"当前 FCF" 显示
+            fcf["fcf_series"]  = ann["fcf_series"]
+            fcf["fcf_dates"]   = ann["fcf_dates"]
+            fcf["frequency"]   = "annual"
+            history_source     = "annual"
+            # 若报表币在两页 (trailing / annual) 不一致 (极少见), 以 annual 页为准
+            if ann.get("report_currency") and not fcf.get("report_currency"):
+                fcf["report_currency"] = ann["report_currency"]
+        else:
+            print(f"  !! {ticker}: annual fallback also failed / too short; "
+                  f"long-horizon CAGR will show N/A", file=sys.stderr)
+
     report_ccy = fcf.get("report_currency")
     quote_ccy  = currency  # 报价币 (US=USD, HK=HKD)
 
@@ -1506,6 +1638,7 @@ def _fetch_dcf(ticker: str, market: str, currency: str | None = None) -> dict | 
         "fcf_series":      fcf.get("fcf_series") or [fcf["fcf_ttm"]],
         "fcf_dates":       fcf.get("fcf_dates") or [],
         "frequency":       fcf.get("frequency") or "quarterly",
+        "history_source":  history_source,   # 'ttm' | 'annual'; 前端 tooltip 显示对应小字说明
         "asof":            fcf.get("asof"),
         "source_url":      fcf["source_url"],
         "currency":        quote_ccy,        # 报价币 (与 close/shares/debt 一致)
@@ -1949,8 +2082,14 @@ def _cell_html(col: str, v: str | None, currency: str) -> str:
     if col in _MONEY_COLS:
         num = _fmt_number(v)
         if num != "N/A" and re.match(r"^-?[\d,]+(?:\.\d+)?[TBM]?$", num):
-            # 货币标签只在标题栏显示一次，这里不再重复
-            return f'<td class="num money"><span class="val">{html.escape(num)}</span></td>'
+            # 右下角小字币种标签: stockanalysis 的 statistics 页把这些金额列 (Market
+            # Cap / EV / Debt / Cash&STI / EBIT-TTM) 都按报价币展示 (US=USD, HK=HKD),
+            # 即使公司报表原币是 CNY, 这些数字也已经过 stockanalysis 内部即期换算.
+            # 因此这里直接标注每行的报价币, 与表头一致.
+            ccy = html.escape(currency or "")
+            ccy_html = f'<span class="ccy" aria-hidden="true">{ccy}</span>' if ccy else ""
+            return (f'<td class="num money">'
+                    f'<span class="val">{html.escape(num)}</span>{ccy_html}</td>')
         return f'<td class="num">{html.escape(num)}</td>'
 
     if col in ("EV/EBIT", "EV/EBITDA", "PE", "PE Fwd", "PEG"):
@@ -2191,6 +2330,21 @@ _HTML_TEMPLATE = """<!doctype html>
   td.asof {{ color: var(--muted); font-size: 12.5px; }}
   td.close {{ font-weight: 600; }}
   td.na {{ color: var(--muted); }}
+  /* Money 列右下角超小字币种标签 (USD / HKD 等). 与右上角 .src-info 圆圈互不重叠;
+     字号极小、颜色偏灰、不遮挡数字, 只做视觉提示. */
+  td.money {{ position: relative; padding-bottom: 12px; }}
+  td.money .ccy {{
+    position: absolute;
+    right: 6px; bottom: 2px;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--muted);
+    opacity: .72;
+    pointer-events: none;
+    user-select: none;
+  }}
   /* 单元格右上角"信息圆圈"按钮 (ⓘ): 悬停 title 提示数据来源, 点击新标签页跳转到源网页。
      覆盖 Stocks (US/HK) 与 ETF 表格所有已有数据源的数值列。
      - 承载 td 需要 position: relative (由 .has-src 挂在 td 上开启)
@@ -3043,6 +3197,13 @@ _HTML_TEMPLATE = """<!doctype html>
           ? `${{fmtBig(fcf0)}} ${{reportCcy}} (≈ ${{fmtBig(fcf0 * fx)}} ${{cur}})`
           : `${{fmtBig(fcf0)}}${{cur ? ' ' + cur : ''}}`;
 
+        // 历史序列来源提示: 'ttm' (常规季度/半年度 TTM) 或 'annual' (fallback 到年报)
+        // 只在 fallback 情形下加个小字, 让用户知道 3Y/5Y CAGR 是用年报点计算的
+        const hs = dcf.history_source || 'ttm';
+        const histNote = (hs === 'annual')
+          ? ` <span class="dcf-sub" title="TTM (季度/半年度) 序列不足以覆盖 ~5 年，已 fallback 到 stockanalysis 年报 FCF 序列，历史 CAGR 端点法用年度点计算。">· 历史 CAGR 用年报 (TTM 数据不足)</span>`
+          : '';
+
         // 汇率徽标 (仅在需要换算时显示, 靠右, Current 左侧)
         //   例如: "FX 1 CNY ≈ 1.1128 HKD"  hover 显示 asof / source
         const fxBadge = needFx
@@ -3065,7 +3226,7 @@ _HTML_TEMPLATE = """<!doctype html>
              +     `</div>`
              +   `</div>`
              +   `<div class="dcf-params">`
-             +     `<span>FCF₀ <b>${{fcf0OrigTxt}}</b></span>`
+             +     `<span>FCF₀ <b>${{fcf0OrigTxt}}</b>${{histNote}}</span>`
              +     `<span>Shares <b>${{fmtBig(shares)}}</b></span>`
              +     `<span>Net Debt <b>${{fmtBig(netDebt)}}</b> ${{cur||''}}</span>`
              +     `<a class="src" href="${{url}}" target="_blank" rel="noopener">source · ${{asof || 'TTM'}}</a>`
@@ -3128,7 +3289,11 @@ _HTML_TEMPLATE = """<!doctype html>
         // 计算 1/3/5 年历史 CAGR (用于 tooltip); 优先按 fcf_dates 精确匹配 N 年前那期
         const freq  = dcf.frequency || 'quarterly';
         const dts   = dcf.fcf_dates || [];
-        const freqLabel = (freq === 'annual') ? '年度' : (freq === 'semiannual' ? '半年度' : '季度');
+        const histSrc = dcf.history_source || 'ttm';
+        // freqLabel 用于 tooltip; 年报 fallback 时明确标注, 让用户知道端点法用的是年度点
+        const freqLabel = (histSrc === 'annual')
+          ? '年度 (fallback: TTM 数据不足)'
+          : ((freq === 'annual') ? '年度' : (freq === 'semiannual' ? '半年度' : '季度'));
         const cagr1 = fcfCagrPastN(dcf.fcf_series, 1, dts, freq);
         const cagr3 = fcfCagrPastN(dcf.fcf_series, 3, dts, freq);
         const cagr5 = fcfCagrPastN(dcf.fcf_series, 5, dts, freq);
