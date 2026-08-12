@@ -123,7 +123,10 @@
   th, td {
     padding: 12px 14px; text-align: center; white-space: nowrap;
     border-bottom: 1px solid var(--border);
+    /* 列分隔竖线: 每格左侧一根细线, 首列由下方 :first-child 规则清除避免与外框重合 */
+    border-left: 1px solid var(--border);
   }
+  th:first-child, td:first-child { border-left: none; }
   thead th {
     position: sticky; top: 0;
     background: var(--panel-2);
@@ -138,12 +141,26 @@
   td.asof { color: var(--muted); font-size: 12.5px; }
   td.close { font-weight: 600; }
   td.na { color: var(--muted); }
-  /* 单元格右上角小圆点: 提示"悬停可见数据源" (给 ETF 的 P/E Fwd 用) */
-  td.num.has-src { position: relative; cursor: help; }
-  td.num.has-src::after {
-    content: ''; position: absolute; top: 6px; right: 6px;
-    width: 5px; height: 5px; border-radius: 50%;
-    background: var(--accent); opacity: .55;
+  /* 单元格右上角"信息圆圈"按钮 (ⓘ): 悬停 title 提示数据来源, 点击新标签页跳转到源网页。
+     覆盖 Stocks (US/HK) 与 ETF 表格所有已有数据源的数值列。
+     - 承载 td 需要 position: relative (由 .has-src 挂在 td 上开启)
+     - 按钮做成 10px 圆形, 半透明, 不遮挡数字; hover 时变亮变实 */
+  td.has-src { position: relative; }
+  a.src-info {
+    position: absolute; top: 4px; right: 4px;
+    width: 12px; height: 12px; line-height: 12px;
+    border-radius: 50%;
+    background: var(--accent); color: #fff;
+    font-size: 9px; font-weight: 700; font-style: italic;
+    font-family: Georgia, "Times New Roman", serif;
+    text-align: center; text-decoration: none;
+    opacity: .35;
+    transition: opacity .15s ease, transform .08s ease;
+    cursor: pointer;
+  }
+  a.src-info:hover {
+    opacity: 1;
+    transform: scale(1.15);
   }
   .tk-badge {
     display: inline-flex; align-items: center; gap: 6px;
@@ -1756,12 +1773,38 @@ Upside:     ${upTxt}`
       });
       window.addEventListener('resize', () => { if (selected.size) render(); });
 
-      // ---- 给指定列的单元格追加数据源 tooltip ----
-      // 按表头文本定位目标列, 再对每行 data-ticker 查 sourceMap, 命中就写 title + 加视觉提示 class.
-      // 当前用于四列: EPS Growth (3-5Y Est) / ROE / P/E (TTM) / P/E (Fwd).
-      // 三列 ETF 专属 (EPS Growth / ROE / P/E Fwd), P/E (TTM) 个股 + ETF 都有.
-      function annotateColSource(headerText, sourceMap) {
+      // ---- 给指定列的单元格追加"数据源信息按钮 (ⓘ)" ----
+      // 按表头文本定位目标列, 再对每行 data-ticker 查 sourceMap / urlMap:
+      //   sourceMap[sym] -> 悬停提示文本 (Source: ...)
+      //   urlMap[sym]    -> 点击跳转 URL (新标签页打开)
+      // 命中就在单元格右上角插入一个圆形 ⓘ <a> 按钮, 同时给 td 加 has-src 类
+      // 以启用 position: relative。
+      // 当前用于四列 ETF: EPS Growth (3-5Y Est) / ROE / P/E (TTM) / P/E (Fwd).
+      // 个股所有数据列 (Close / AsOf / MarketCap ... PEG) 走下面的 annotateStockCols.
+      function attachSrcInfo(cell, label, url) {
+        if (!cell || !label) return;
+        // 避免同一单元格重复挂载
+        if (cell.querySelector('a.src-info')) return;
+        const a = document.createElement('a');
+        a.className = 'src-info';
+        a.textContent = 'i';
+        a.setAttribute('title', 'Source: ' + label + ' (click to open)');
+        a.setAttribute('aria-label', 'Data source: ' + label);
+        if (url) {
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        } else {
+          a.href = 'javascript:void(0)';
+          a.style.cursor = 'help';
+        }
+        cell.classList.add('has-src');
+        cell.insertBefore(a, cell.firstChild);
+      }
+
+      function annotateColSource(headerText, sourceMap, urlMap) {
         if (!sourceMap || Object.keys(sourceMap).length === 0) return;
+        urlMap = urlMap || {};
         document.querySelectorAll('table').forEach(tbl => {
           const ths = tbl.querySelectorAll('thead th');
           let colIdx = -1;
@@ -1777,16 +1820,116 @@ Upside:     ${upTxt}`
             if (!label) return;
             const cell = tr.children[colIdx];
             if (!cell) return;
-            // 避免重复挂载 (每列独立, 不会互相覆盖 title)
-            cell.setAttribute('title', 'Source: ' + label);
-            cell.classList.add('has-src');
+            attachSrcInfo(cell, label, urlMap[sym]);
           });
         });
       }
-      annotateColSource('P/E (Fwd)',              FWD_SOURCE);
-      annotateColSource('P/E (TTM)',              PE_TTM_SOURCE);
-      annotateColSource('EPS Growth (3-5Y Est)',  EPS_GROWTH_SOURCE);
-      annotateColSource('ROE',                    ROE_SOURCE);
+
+      // ---- 计算 ETF 数据源对应的跳转 URL ----
+      // 由 label 文本关键字反推源网页 (发行商官方 / 指数代理), 无需在后端再维护一份 URL 表.
+      // 匹配失败返回 null, 前端会退化为"仅悬停提示, 不可点击"。
+      function etfSrcUrl(sym, label) {
+        if (!label) return null;
+        const s = label.toLowerCase();
+        if (s.includes('ssga')) {
+          // SSGA SPYM (S&P 500) 官方 ETF 页
+          return 'https://www.ssga.com/us/en/individual/etfs/spdr-portfolio-sp-500-etf-spym';
+        }
+        if (s.includes('invesco')) {
+          // Invesco QQQM (Nasdaq 100) 官方 ETF 页
+          return 'https://www.invesco.com/us/financial-products/etfs/product-detail?audienceType=Investor&ticker=QQQM';
+        }
+        if (s.includes('vanguard')) {
+          // Vanguard 官方页 (VUG 用 VUG 主页, SPYM/VOO proxy 走 VOO)
+          if (sym === 'VUG') return 'https://investor.vanguard.com/investment-products/etfs/profile/vug';
+          return 'https://investor.vanguard.com/investment-products/etfs/profile/voo';
+        }
+        if (s.includes('multpl')) {
+          return 'https://www.multpl.com/s-p-500-pe-ratio/table/by-month';
+        }
+        if (s.includes('siblis')) {
+          return 'https://siblisresearch.com/data/nasdaq-100-pe-ratio/';
+        }
+        if (s.includes('stockanalysis')) {
+          // ETF 加权 P/E (TTM) 来自 stockanalysis.com/etf/{t}/
+          return 'https://stockanalysis.com/etf/' + sym.toLowerCase() + '/';
+        }
+        return null;
+      }
+
+      // ---- 给个股 (US + HK) 所有数据列挂载数据源 ⓘ 按钮 ----
+      // 个股数据统一走 stockanalysis.com, 按列语义走两种页面:
+      //   Close / AsOf                    -> 主页 (顶部大号价格块)
+      //   MarketCap / EV / Debt / Cash&STI /
+      //     EBIT(TTM) / EV/EBIT / EV/EBITDA /
+      //     P/E(TTM) / P/E(Fwd) / PEG      -> statistics 页
+      // HK 与 US 路径不同, 由 ticker 是否纯数字判断 (港股 4 位数字代码 e.g. 0700).
+      function stockSrcHome(sym) {
+        if (/^\d+$/.test(sym)) return 'https://stockanalysis.com/quote/hkg/' + sym + '/';
+        return 'https://stockanalysis.com/stocks/' + sym.toLowerCase() + '/';
+      }
+      function stockSrcStats(sym) {
+        if (/^\d+$/.test(sym)) return 'https://stockanalysis.com/quote/hkg/' + sym + '/statistics/';
+        return 'https://stockanalysis.com/stocks/' + sym.toLowerCase() + '/statistics/';
+      }
+      // 表头文本 -> (label, url 类型) ; url 类型: 'home' | 'stats'
+      const STOCK_COL_SPEC = [
+        ['Close',                 'stockanalysis.com · Quote (home page)',      'home'],
+        ['As Of',                 'stockanalysis.com · Quote timestamp',        'home'],
+        ['Market Cap',            'stockanalysis.com · Statistics',             'stats'],
+        ['EV',                    'stockanalysis.com · Statistics',             'stats'],
+        ['Total Debt',            'stockanalysis.com · Statistics',             'stats'],
+        ['Cash + STI',            'stockanalysis.com · Statistics',             'stats'],
+        ['EBIT (TTM)',            'stockanalysis.com · Statistics',             'stats'],
+        ['EV / EBIT',             'stockanalysis.com · Statistics',             'stats'],
+        ['EV / EBITDA',           'stockanalysis.com · Statistics',             'stats'],
+        ['P/E (TTM)',             'stockanalysis.com · Statistics',             'stats'],
+        ['P/E (Fwd)',             'stockanalysis.com · Statistics',             'stats'],
+        ['PEG',                   'stockanalysis.com · Statistics',             'stats'],
+      ];
+      function annotateStockCols() {
+        document.querySelectorAll('table').forEach(tbl => {
+          const ths = tbl.querySelectorAll('thead th');
+          // 建立"表头文本 -> 列索引"字典
+          const headerIdx = {};
+          ths.forEach((th, i) => {
+            const txt = (th.textContent || '').replace(/\s+/g, ' ').trim();
+            headerIdx[txt] = i;
+          });
+          tbl.querySelectorAll('tbody tr[data-ticker]').forEach(tr => {
+            const sym = tr.getAttribute('data-ticker');
+            if (ETF_SET.has(sym)) return;  // ETF 走各自的 SOURCE map, 不走通用规则
+            STOCK_COL_SPEC.forEach(([header, label, kind]) => {
+              const idx = headerIdx[header];
+              if (idx == null) return;
+              const cell = tr.children[idx];
+              if (!cell) return;
+              // 若该单元格为空 (—), 跳过挂载, 避免"空数据"上出现指向 stats 页的信息按钮误导
+              const txt = (cell.textContent || '').trim();
+              if (!txt || txt === '—' || txt === '-' || txt === 'N/A') return;
+              const url = (kind === 'home') ? stockSrcHome(sym) : stockSrcStats(sym);
+              attachSrcInfo(cell, label, url);
+            });
+          });
+        });
+      }
+
+      // ---- ETF 已有 SOURCE map 走 annotateColSource + etfSrcUrl 反推 URL ----
+      // 为每列构造 ticker -> url 表
+      function buildUrlMap(sourceMap) {
+        const out = {};
+        Object.keys(sourceMap).forEach(sym => {
+          const u = etfSrcUrl(sym, sourceMap[sym]);
+          if (u) out[sym] = u;
+        });
+        return out;
+      }
+      annotateColSource('P/E (Fwd)',             FWD_SOURCE,        buildUrlMap(FWD_SOURCE));
+      annotateColSource('P/E (TTM)',             PE_TTM_SOURCE,     buildUrlMap(PE_TTM_SOURCE));
+      annotateColSource('EPS Growth (3-5Y Est)', EPS_GROWTH_SOURCE, buildUrlMap(EPS_GROWTH_SOURCE));
+      annotateColSource('ROE',                   ROE_SOURCE,        buildUrlMap(ROE_SOURCE));
+      // 个股表格所有数据列一次性挂载
+      annotateStockCols();
     })();
   </script>
 </body>

@@ -1179,29 +1179,97 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
         print(f"  .. SA FCF {ticker}: page not accessible ({url})", file=sys.stderr)
         return None
 
-    # 字段名无引号: fcf:[数值,数值,...]。数值可能为负 (亏钱的公司)。
-    # 数组顺序为"新→旧", 覆盖约 5 年 (20 个季度 TTM 点)。
-    m = re.search(r'\bfcf\s*:\s*\[([-0-9.eE, ]+)\]', html)
+    # 字段名无引号: fcf:[数值,数值,...] 或 fcf:[数值,null,数值,...]。
+    # 数组顺序为"新→旧", 覆盖约 5 年。
+    #
+    # 关键: 页面里存在两组 fcf: 数组:
+    #   (a) 主数据区: fcf:[9879902000,null,null,null,4581552000,null,...]
+    #       -- 只有半年报的港股公司会有大量 null (Q1/Q3 未披露)
+    #   (b) prior 缓存: prior:{fcf:[1292892000,958891000],...}
+    #       -- stockanalysis 内部的历史快照, 数字被"聚合"过, 不是真正的 FCF
+    # 老正则 [-0-9.eE, ] 字符集不含 'n'/'u'/'l', 遇到 null 就匹配失败,
+    # re.search 会继续往后找到 (b), 导致数据被污染 (差近 8 倍)。
+    # 修复: 用 [^\]]+ 贪婪到 ']', 然后按元素解析, null → skip。
+    m = re.search(r'\bfcf\s*:\s*\[([^\]]+)\]', html)
     if not m:
         print(f"  !! SA FCF {ticker}: 'fcf' array not found in page", file=sys.stderr)
         return None
-    raw = m.group(1)
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    if not parts:
+    raw_fcf = m.group(1)
+    raw_parts = [p.strip() for p in raw_fcf.split(",")]
+    if not raw_parts:
         print(f"  !! SA FCF {ticker}: 'fcf' array is empty", file=sys.stderr)
         return None
+
+    # 同步抓 datekey (与 fcf 数组一一对应, 用于识别披露频率)
+    md = re.search(r'\bdatekey\s*:\s*\[([^\]]+)\]', html)
+    dates_all: list[str] = []
+    if md:
+        dates_all = re.findall(r'"([^"]+)"', md.group(1))
+
+    # 逐元素解析: null / 空 / 坏值都跳过, 但保留对应的 datekey (用来判定频率)
     fcf_series: list[float] = []
-    for p in parts:
+    dates_kept: list[str]   = []
+    for i, p in enumerate(raw_parts):
+        if not p or p == "null":
+            continue
         try:
-            fcf_series.append(float(p))
+            v = float(p)
         except ValueError:
-            # 单个坏值不阻塞整体 (页面偶尔会有 "null" 之类); 截断到已成功的部分
-            break
+            continue
+        fcf_series.append(v)
+        if i < len(dates_all):
+            dates_kept.append(dates_all[i])
+
     if not fcf_series:
-        print(f"  !! SA FCF {ticker}: cannot parse any fcf values (first={parts[0]!r})", file=sys.stderr)
+        print(f"  !! SA FCF {ticker}: cannot parse any numeric fcf values", file=sys.stderr)
         return None
-    # 只保留前 20 个季度 (5 年), 太老的没意义
-    fcf_series = fcf_series[:20]
+
+    # 判定披露频率: 看相邻两个有效点日期差 (取中位数, 抗异常点)
+    #   ~3 个月 → quarterly (美股/大部分港股)
+    #   ~6 个月 → semiannual (只披露半年报的港股, 如 9992 泡泡玛特, 9633 农夫山泉)
+    #   ~12 个月 → annual (仅年报)
+    # 注: frequency 仅作 "整体披露密度" 的粗略提示; 前端计算 N 年 CAGR 时不依赖它,
+    # 而是按 fcf_dates 中"最接近 N 年前"的那一期做匹配, 从而能正确处理 9992 这种
+    # "早期季度报, 近期改半年报" 的混合披露公司。
+    from datetime import datetime as _dt
+    frequency = "quarterly"  # 默认
+    if len(dates_kept) >= 2:
+        gaps_days: list[int] = []
+        for i in range(len(dates_kept) - 1):
+            try:
+                d0 = _dt.strptime(dates_kept[i],     "%Y-%m-%d")
+                d1 = _dt.strptime(dates_kept[i + 1], "%Y-%m-%d")
+                gaps_days.append(abs((d0 - d1).days))
+            except (ValueError, TypeError):
+                pass
+        if gaps_days:
+            gaps_days.sort()
+            median_gap = gaps_days[len(gaps_days) // 2]
+            if   median_gap >= 300: frequency = "annual"
+            elif median_gap >= 130: frequency = "semiannual"
+            else:                   frequency = "quarterly"
+
+    # 保留窗口: 覆盖约 5 年即可 (太老的意义不大)
+    # 用 fcf_dates 的首尾日期跨度判断, 保留跨度 <= ~5.5 年的部分
+    if dates_kept:
+        try:
+            d_head = _dt.strptime(dates_kept[0], "%Y-%m-%d")
+            keep_n = len(fcf_series)
+            for i in range(1, len(dates_kept)):
+                try:
+                    di = _dt.strptime(dates_kept[i], "%Y-%m-%d")
+                    if (d_head - di).days > 365 * 5 + 180:  # ~5.5 年
+                        keep_n = i
+                        break
+                except ValueError:
+                    pass
+            fcf_series = fcf_series[:keep_n]
+            dates_kept = dates_kept[:keep_n]
+        except ValueError:
+            fcf_series = fcf_series[:20]
+            dates_kept = dates_kept[:20]
+    else:
+        fcf_series = fcf_series[:20]
     fcf_ttm = fcf_series[0]
 
     # 顺带抓 fiscalYear[0] 作为 "asof" 标签 (格式 "2026 Q3" 或年度 "2024")
@@ -1218,14 +1286,179 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
         if qs:
             asof = f"{asof} {qs[0]}"
 
-    print(f"  ok SA FCF {ticker}: TTM FCF=${fcf_ttm/1e9:.2f}B  ({asof or 'n/a'}) "
-          f"series_len={len(fcf_series)}",
+    # 报表原币 (functional/reporting currency): 页面里一定有一行
+    #   "Financials in millions CNY. Fiscal year is ..."
+    #   "Financials in millions HKD. Fiscal year is ..."
+    # 用它作为 fcf_series 的实际计价币。
+    # 港股常见分歧: 报价币是 HKD (statistics/quote 页), 但报表原币是 CNY (大陆背景公司,
+    # 如 9992 泡泡玛特 / 9633 农夫山泉 / 0700 腾讯) 或 HKD (港资公司)。
+    # 美股则一般都是 USD, 极少数 ADR (如 BABA) 也是 USD 报表。
+    report_currency: str | None = None
+    mc = re.search(r'Financials\s+in\s+\w+\s+([A-Z]{3})', html)
+    if mc:
+        report_currency = mc.group(1)
+
+    print(f"  ok SA FCF {ticker}: TTM FCF={fcf_ttm/1e9:.2f}B {report_currency or '?'} "
+          f"({asof or 'n/a'}) series_len={len(fcf_series)} freq={frequency}",
           file=sys.stderr)
     return {
-        "fcf_ttm":    fcf_ttm,
-        "fcf_series": fcf_series,  # 新→旧, 最多 20 项 (季度 TTM); 供前端算历史 CAGR
-        "asof":       asof,
-        "source_url": url,
+        "fcf_ttm":         fcf_ttm,
+        "fcf_series":      fcf_series,  # 新→旧; 跨度约 5 年内
+        "fcf_dates":       dates_kept,  # 与 fcf_series 一一对应的 YYYY-MM-DD 日期字符串
+        "frequency":       frequency,   # 'quarterly' | 'semiannual' | 'annual' (粗略披露密度)
+        "asof":            asof,
+        "source_url":      url,
+        "report_currency": report_currency,  # 报表原币 (可能 None)
+    }
+
+
+def _fetch_fx_implied(ticker: str, market: str, report_ccy: str, quote_ccy: str) -> dict | None:
+    """反算 stockanalysis 内部使用的隐含即期汇率 report_ccy → quote_ccy。
+
+    背景
+    ----
+    港股常见: 报价币 = HKD (statistics/quote/close/market-cap 都是港币), 但报表原币
+    可能 = CNY (大陆背景公司如 9992/9633/0700) 或 USD (国际保险如 1299)。
+    如果直接把 CNY 计价的 FCF₀ 拿去和 HKD 计价的 Net Debt / Price 混算 DCF, 每股
+    公允价会系统性错约 10-14% (2026 年即期 CNY/HKD ≈ 1.11-1.14)。
+
+    反算方法
+    --------
+    stockanalysis 在 statistics 页展示 HKD 数值 (EBIT / EBITDA / Net Income / FCF /
+    Total Debt / Enterprise Value 都是 HKD), 而 financials 子页 (income / cash-flow)
+    则用报表原币。同一实体、同一时点、两种计价, 相除即得 stockanalysis 内部使用
+    的即期汇率。
+
+    实现: 收集多个 (HKD, 原币) 锚点对, 取比值中位数抗畸值:
+      * EBIT (stats) ÷ operatingIncome[0] (income-statement)
+      * EBITDA (stats) ÷ ebitda[0] (income-statement)
+      * Net Income (stats) ÷ netIncome[0] (income-statement)
+      * Free Cash Flow (stats) ÷ fcf[0] (cash-flow-statement)
+
+    Returns
+    -------
+    dict | None
+        None: 报价币 == 报表币 (无需换算) / 抓取失败 / 锚点不足。
+        dict: {
+          "fx":       float,   # 1 unit report_ccy = fx units quote_ccy
+          "asof":     str,     # 反算所用锚点的期末日 (YYYY-MM-DD, 从 datekey 取)
+          "source":   str,     # 反算方法说明 (含使用的锚点数)
+          "anchors":  list,    # [(label, hkd_val, cny_val, ratio), ...] 供调试
+          "report_currency": str,
+          "quote_currency":  str,
+        }
+    """
+    if report_ccy == quote_ccy or not report_ccy or not quote_ccy:
+        return None
+    if market != "HK":
+        # 目前只有港股会遇到 quote != report; 美股几乎全是 USD 一致.
+        return None
+
+    # 抓 stats 页 (HKD 侧)
+    url_st = f"https://stockanalysis.com/quote/hkg/{ticker}/statistics/"
+    html_st = _get(url_st)
+    if not html_st:
+        return None
+
+    def _stats_val(name: str) -> float | None:
+        """从 stats 页挖 `>Name<...title="123,456,789"...>` 里的原始数字."""
+        p = re.search(
+            rf'>{re.escape(name)}<[^<]*</span>.*?title="([0-9,\.\-]+)"',
+            html_st, re.S
+        )
+        if not p:
+            return None
+        try:
+            return float(p.group(1).replace(",", ""))
+        except ValueError:
+            return None
+
+    stats_ebit   = _stats_val("EBIT")
+    stats_ni     = _stats_val("Net Income")
+    stats_fcf    = _stats_val("Free Cash Flow")
+
+    # 抓 income-statement 页 (报表原币侧)
+    # 关键: stockanalysis 的 IS 页字段名和 stats 页显示名不完全一致:
+    #   stats "EBIT"        <-> IS "opinc"     (Operating Income = EBIT)
+    #   stats "Net Income"  <-> IS "netinccmn" (Net Income to Common)
+    #   stats "EBITDA"      <-> IS 页无原始序列 (stats 页是 opinc + D&A 合成), 跳过
+    url_is = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/?p=trailing"
+    html_is = _get(url_is)
+    is_first: dict[str, float] = {}
+    is_asof: str | None = None
+    if html_is:
+        for key in ("opinc", "netinccmn"):
+            m = re.search(rf'\b{key}\s*:\s*\[([^\]]+)\]', html_is)
+            if m:
+                for p in m.group(1).split(","):
+                    p = p.strip()
+                    if not p or p == "null":
+                        continue
+                    try:
+                        is_first[key] = float(p); break
+                    except ValueError:
+                        continue
+        md = re.search(r'\bdatekey\s*:\s*\[([^\]]+)\]', html_is)
+        if md:
+            dks = re.findall(r'"([^"]+)"', md.group(1))
+            if dks:
+                is_asof = dks[0]
+
+    # 抓 cash-flow 页 (报表原币, fcf 首值)
+    url_cf = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/cash-flow-statement/?p=trailing"
+    html_cf = _get(url_cf)
+    cf_fcf: float | None = None
+    if html_cf:
+        m = re.search(r'\bfcf\s*:\s*\[([^\]]+)\]', html_cf)
+        if m:
+            for p in m.group(1).split(","):
+                p = p.strip()
+                if p and p != "null":
+                    try: cf_fcf = float(p); break
+                    except ValueError: pass
+
+    # 组装锚点对
+    anchors: list[tuple[str, float, float, float]] = []
+    def _add(label: str, hkd: float | None, orig: float | None) -> None:
+        if hkd is None or orig is None or not orig:
+            return
+        # 排除量级明显不匹配的畸值 (例如 stats 页某字段被空表格污染)
+        # 合理汇率区间: 0.05 ≤ HKD/orig ≤ 20 (远宽于 CNY/HKD~1.1 或 USD/HKD~7.8)
+        ratio = hkd / orig
+        if not (0.05 <= abs(ratio) <= 20):
+            return
+        anchors.append((label, hkd, orig, ratio))
+
+    _add("EBIT",           stats_ebit, is_first.get("opinc"))
+    _add("Net Income",     stats_ni,   is_first.get("netinccmn"))
+    _add("Free Cash Flow", stats_fcf,  cf_fcf)
+
+    if len(anchors) < 2:
+        print(f"  !! FX {ticker}: 锚点不足 ({len(anchors)} < 2), 放弃反算", file=sys.stderr)
+        return None
+
+    ratios = sorted(a[3] for a in anchors)
+    n = len(ratios)
+    median = ratios[n // 2] if n % 2 == 1 else (ratios[n // 2 - 1] + ratios[n // 2]) / 2
+
+    # 一致性检查: 所有锚点比值都应接近中位数 (相对偏差 ≤ 2%)
+    outliers = [a for a in anchors if abs(a[3] - median) / abs(median) > 0.02]
+    if outliers:
+        outlier_desc = ", ".join(f"{a[0]}={a[3]:.4f}" for a in outliers)
+        print(f"  !! FX {ticker}: 锚点分歧 (median={median:.4f}, outliers: {outlier_desc})",
+              file=sys.stderr)
+        # 保留但标注在 source 里, 便于用户判断是否可信
+
+    print(f"  ok FX {ticker}: 1 {report_ccy} = {median:.4f} {quote_ccy} "
+          f"(反算自 {n} 锚点, asof={is_asof or '?'})", file=sys.stderr)
+
+    return {
+        "fx":              median,
+        "asof":            is_asof,
+        "source":          f"stockanalysis 双页反算 ({n} 锚点: {'/'.join(a[0] for a in anchors)})",
+        "anchors":         [(a[0], a[1], a[2], a[3]) for a in anchors],
+        "report_currency": report_ccy,
+        "quote_currency":  quote_ccy,
     }
 
 
@@ -1234,18 +1467,53 @@ def _fetch_dcf(ticker: str, market: str, currency: str | None = None) -> dict | 
 
     前端还需要: shares_out / total_debt / cash / price / EBIT — 这些已经在 snapshot
     里注入 JS, 因此这里只补 FCF₀ 一个字段。
+
+    港股币种问题
+    ----------
+    stockanalysis 港股页面存在"报价币 vs 报表币"差异 (如 9992/9633/0700 报表币是
+    CNY, 但股价/市值/净债务是 HKD)。为了让前端 DCF 计算不混币, 这里同时抓取报表
+    原币 (report_currency) 并反算隐含即期汇率 (fx_to_quote), 前端在算 fair value
+    前会把 FCF₀ 乘以 fx_to_quote 换算成报价币。假设未来所有年份汇率恒定 = 今日即期
+    (学术上主流做法; 汇率的不确定性远小于 g/WACC)。
     """
     if market == "ETF":
         return None
     fcf = _fetch_sa_fcf(ticker, market)
     if fcf is None:
         return None
+    report_ccy = fcf.get("report_currency")
+    quote_ccy  = currency  # 报价币 (US=USD, HK=HKD)
+
+    # 若报表币 != 报价币 (常见于港股), 反算隐含汇率
+    fx_to_quote: float = 1.0
+    fx_asof: str | None    = None
+    fx_source: str | None  = None
+    fx_note:  str | None   = None
+    if report_ccy and quote_ccy and report_ccy != quote_ccy:
+        fx = _fetch_fx_implied(ticker, market, report_ccy, quote_ccy)
+        if fx:
+            fx_to_quote = fx["fx"]
+            fx_asof     = fx["asof"]
+            fx_source   = fx["source"]
+        else:
+            # 反算失败: 保守起见 fx=1 且明确标注 "未换算", 让前端 tooltip 可以警告用户
+            fx_note = f"⚠ 报表币 {report_ccy} != 报价币 {quote_ccy}, 但汇率反算失败, 未做换算"
+    elif report_ccy and quote_ccy and report_ccy == quote_ccy:
+        fx_source = "报表币 = 报价币, 无需换算"
+
     return {
-        "fcf_ttm":    fcf["fcf_ttm"],
-        "fcf_series": fcf.get("fcf_series") or [fcf["fcf_ttm"]],
-        "asof":       fcf.get("asof"),
-        "source_url": fcf["source_url"],
-        "currency":   currency,
+        "fcf_ttm":         fcf["fcf_ttm"],
+        "fcf_series":      fcf.get("fcf_series") or [fcf["fcf_ttm"]],
+        "fcf_dates":       fcf.get("fcf_dates") or [],
+        "frequency":       fcf.get("frequency") or "quarterly",
+        "asof":            fcf.get("asof"),
+        "source_url":      fcf["source_url"],
+        "currency":        quote_ccy,        # 报价币 (与 close/shares/debt 一致)
+        "report_currency": report_ccy,       # 报表原币 (fcf_ttm 的实际计价)
+        "fx_to_quote":     fx_to_quote,      # 换算系数: fcf_ttm(报表币) * fx_to_quote = fcf_ttm(报价币)
+        "fx_asof":         fx_asof,          # 汇率反算所用锚点的期末日
+        "fx_source":       fx_source,        # 汇率来源说明 (显示在 tooltip)
+        "fx_note":         fx_note,          # 异常情况的用户可读提示 (可能 None)
     }
 
 
@@ -1905,7 +2173,10 @@ _HTML_TEMPLATE = """<!doctype html>
   th, td {{
     padding: 12px 14px; text-align: center; white-space: nowrap;
     border-bottom: 1px solid var(--border);
+    /* 列分隔竖线: 每格左侧一根细线, 首列由下方 :first-child 规则清除避免与外框重合 */
+    border-left: 1px solid var(--border);
   }}
+  th:first-child, td:first-child {{ border-left: none; }}
   thead th {{
     position: sticky; top: 0;
     background: var(--panel-2);
@@ -1920,12 +2191,26 @@ _HTML_TEMPLATE = """<!doctype html>
   td.asof {{ color: var(--muted); font-size: 12.5px; }}
   td.close {{ font-weight: 600; }}
   td.na {{ color: var(--muted); }}
-  /* 单元格右上角小圆点: 提示"悬停可见数据源" (给 ETF 的 P/E Fwd 用) */
-  td.num.has-src {{ position: relative; cursor: help; }}
-  td.num.has-src::after {{
-    content: ''; position: absolute; top: 6px; right: 6px;
-    width: 5px; height: 5px; border-radius: 50%;
-    background: var(--accent); opacity: .55;
+  /* 单元格右上角"信息圆圈"按钮 (ⓘ): 悬停 title 提示数据来源, 点击新标签页跳转到源网页。
+     覆盖 Stocks (US/HK) 与 ETF 表格所有已有数据源的数值列。
+     - 承载 td 需要 position: relative (由 .has-src 挂在 td 上开启)
+     - 按钮做成 10px 圆形, 半透明, 不遮挡数字; hover 时变亮变实 */
+  td.has-src {{ position: relative; }}
+  a.src-info {{
+    position: absolute; top: 4px; right: 4px;
+    width: 12px; height: 12px; line-height: 12px;
+    border-radius: 50%;
+    background: var(--accent); color: #fff;
+    font-size: 9px; font-weight: 700; font-style: italic;
+    font-family: Georgia, "Times New Roman", serif;
+    text-align: center; text-decoration: none;
+    opacity: .35;
+    transition: opacity .15s ease, transform .08s ease;
+    cursor: pointer;
+  }}
+  a.src-info:hover {{
+    opacity: 1;
+    transform: scale(1.15);
   }}
   .tk-badge {{
     display: inline-flex; align-items: center; gap: 6px;
@@ -2163,6 +2448,16 @@ _HTML_TEMPLATE = """<!doctype html>
   }}
   .dcf-title b {{ font-size: 14px; color: var(--text); }}
   .dcf-sub {{ color: var(--muted); font-family: var(--mono); font-size: 10.5px; margin-left: 6px; }}
+  /* 卡头右侧: 汇率徽标 + Current 价格, 中间以间隔分开 */
+  .dcf-head-right {{ display: flex; align-items: baseline; gap: 10px; }}
+  .dcf-fx-badge {{
+    font-family: var(--mono); font-size: 10px;
+    padding: 2px 6px; border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--text);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    white-space: nowrap; cursor: help;
+  }}
   .dcf-empty-msg {{ color: var(--muted); font-size: 11.5px; line-height: 1.55; }}
   .dcf-empty-msg code {{
     font-family: var(--mono); font-size: 10.5px;
@@ -2643,31 +2938,68 @@ _HTML_TEMPLATE = """<!doctype html>
           : `rgba(239, 68, 68, ${{alpha}})`;  // bad
       }}
 
-      // 用过去 N 年 (N∈{{1,3,5}}) 的季度 TTM FCF 数据算历史 CAGR。
-      //   fcfSeries: 新→旧, 季度 TTM 序列 (最多 20 项)。
-      //   startIdx = N*4 (1Y=4, 3Y=12, 5Y=19: 因为 20 个点最旧下标 19)。
-      //   基期或终期 ≤ 0 → 不能算 (符号变化时 CAGR 无几何意义), 返回 null。
-      //   数据不足 → 返回 null (前端显示 "N/A")。
-      function fcfCagrPastN(fcfSeries, N) {{
+      // 用过去 N 年 (N∈{{1,3,5}}) 的 TTM FCF 数据算历史 CAGR。
+      //   fcfSeries: 新→旧 TTM 序列。
+      //   fcfDates:  与 series 一一对应的 'YYYY-MM-DD' 字符串数组 (可为空: 退化为按下标查找)。
+      //   freq:      'quarterly' | 'semiannual' | 'annual' (仅在 fcfDates 缺失时用作步长回退)。
+      // 策略:
+      //   有 fcfDates → 找"距离 series[0] 恰好 N*365.25 天"的那个下标 (取最接近的 index),
+      //                 用它的实际跨度做 CAGR (years = 真实天数 / 365.25)。这样能正确处理
+      //                 9992 这种"早期季度、近期半年"的混合披露模式。
+      //   无 fcfDates → 回退到 stepPerYear 静态查找。
+      //   端点 ≤ 0    → 返回 n/m (跨零点几何无意义)。
+      //   数据不足    → 返回 null (前端显示 "N/A")。
+      function fcfCagrPastN(fcfSeries, N, fcfDates, freq) {{
         if (!Array.isArray(fcfSeries) || fcfSeries.length < 2) return null;
-        // 5Y 特殊处理: 20 个点最旧下标 19, 时间跨度 ≈ 19/4 = 4.75 年, 近似当 5 年
-        // 1Y: 需要下标 4;  3Y: 需要下标 12
         let startIdx, years;
-        if (N === 1)      {{ startIdx = 4;  years = 1; }}
-        else if (N === 3) {{ startIdx = 12; years = 3; }}
-        else              {{ startIdx = Math.min(19, fcfSeries.length - 1);
-                            years = startIdx / 4; }}
-        if (startIdx >= fcfSeries.length) return null;
+        const hasDates = Array.isArray(fcfDates) && fcfDates.length === fcfSeries.length && fcfDates[0];
+        if (hasDates) {{
+          const t0 = Date.parse(fcfDates[0]);
+          if (!isFinite(t0)) return null;
+          const targetGapMs = N * 365.25 * 86400 * 1000;
+          // 找 |gap - target| 最小的下标 (i>=1)
+          let bestI = -1, bestDiff = Infinity;
+          for (let i = 1; i < fcfDates.length; i++) {{
+            const ti = Date.parse(fcfDates[i]);
+            if (!isFinite(ti)) continue;
+            const gap  = t0 - ti;
+            const diff = Math.abs(gap - targetGapMs);
+            if (diff < bestDiff) {{ bestDiff = diff; bestI = i; }}
+          }}
+          if (bestI < 0) return null;
+          const gapDays  = (t0 - Date.parse(fcfDates[bestI])) / 86400000;
+          const gapYears = gapDays / 365.25;
+          // 精度判定: 找到的点必须"接近"目标 N 年 (差 ≤ 0.6 年); 否则视为数据不足
+          // (例外: N=5 时容忍 4 年以上, 允许 4.75 年这种近似)
+          const minYears = (N === 5) ? 4.0 : (N - 0.6);
+          const maxYears = N + 0.6;
+          if (gapYears < minYears || gapYears > maxYears) return null;
+          startIdx = bestI;
+          years    = gapYears;
+        }} else {{
+          const stepPerYear =
+                (freq === 'annual')     ? 1
+              : (freq === 'semiannual') ? 2
+              : 4;
+          const idealIdx = N * stepPerYear;
+          if (idealIdx < fcfSeries.length) {{
+            startIdx = idealIdx; years = N;
+          }} else if (N === 5 && fcfSeries.length >= 3) {{
+            startIdx = fcfSeries.length - 1;
+            years    = startIdx / stepPerYear;
+            if (years < 3) return null;
+          }} else {{
+            return null;
+          }}
+        }}
         const now  = fcfSeries[0];
         const then = fcfSeries[startIdx];
         if (now == null || then == null) return null;
-        // 端点法: CAGR = (now / then)^(1/years) - 1
-        // 任一端点 ≤ 0 → CAGR 几何上无意义 (跨零点), 返回 n/m 并注明原因端。
         if (now <= 0 && then <= 0) return {{ nm: true, nmReason: 'both', now, then, years }};
         if (now <= 0)              return {{ nm: true, nmReason: 'now',  now, then, years }};
         if (then <= 0)             return {{ nm: true, nmReason: 'then', now, then, years }};
         const cagr = Math.pow(now / then, 1 / years) - 1;
-        return {{ cagr, now, then, years }};
+        return {{ cagr, now, then, years, startIdx }};
       }}
 
       // 生成一张 DCF 卡的 HTML (静态骨架, 网格由 dcfRecomputeCard 首次填充)
@@ -2699,18 +3031,43 @@ _HTML_TEMPLATE = """<!doctype html>
         const netDebt = (snap.debt || 0) - (snap.cash || 0);
         const asof    = dcf.asof || '';
         const url     = dcf.source_url || '#';
+        // 币种换算 (方案 A): 报表币 -> 报价币 (port stats/close/netDebt 已经是报价币)
+        //   fx=1.0: 报表币==报价币 (US 大多数 / 港资港股) 或 老快照无此字段 (向后兼容)
+        //   fx>1  : 常见如 CNY→HKD ≈ 1.11-1.14
+        const reportCcy = dcf.report_currency || '';
+        const fx        = (typeof dcf.fx_to_quote === 'number' && isFinite(dcf.fx_to_quote))
+                          ? dcf.fx_to_quote : 1.0;
+        const needFx    = reportCcy && reportCcy !== cur && Math.abs(fx - 1) > 1e-9;
+        // 参数条: 若需换算, FCF₀ 显示 "98.80B CNY (≈ 110.00B HKD)"; 否则只显示原值
+        const fcf0OrigTxt = needFx
+          ? `${{fmtBig(fcf0)}} ${{reportCcy}} (≈ ${{fmtBig(fcf0 * fx)}} ${{cur}})`
+          : `${{fmtBig(fcf0)}}${{cur ? ' ' + cur : ''}}`;
+
+        // 汇率徽标 (仅在需要换算时显示, 靠右, Current 左侧)
+        //   例如: "FX 1 CNY ≈ 1.1128 HKD"  hover 显示 asof / source
+        const fxBadge = needFx
+          ? `<span class="dcf-fx-badge" title="${{
+                  ('FX asof ' + (dcf.fx_asof || 'n/a')
+                   + '\\n' + (dcf.fx_source || '反算')
+                   + '\\n假设未来所有年份汇率恒定 = 今日即期'
+                  ).replace(/"/g, '&quot;')
+             }}">FX 1 ${{reportCcy}} ≈ ${{fx.toFixed(4)}} ${{cur}}</span>`
+          : '';
 
         // 卡骨架: 参数条 + 滑块 + 网格容器 + footer
         const gPct = (DCF_G_DEFAULT * 100).toFixed(1);
         return `<div class="dcf-card" data-ticker="${{ticker}}">`
              +   `<div class="dcf-card-head">`
              +     `<div class="dcf-title"><b>${{ticker}}</b> <span class="dcf-sub">${{cur||''}} · N=<span class="dcf-n">?</span>y</span></div>`
-             +     `<div class="dcf-sub">Current ${{fmtMoney(price)}}</div>`
+             +     `<div class="dcf-head-right">`
+             +       fxBadge
+             +       `<span class="dcf-sub">Current ${{fmtMoney(price)}}</span>`
+             +     `</div>`
              +   `</div>`
              +   `<div class="dcf-params">`
-             +     `<span>FCF₀ <b>${{fmtBig(fcf0)}}</b></span>`
+             +     `<span>FCF₀ <b>${{fcf0OrigTxt}}</b></span>`
              +     `<span>Shares <b>${{fmtBig(shares)}}</b></span>`
-             +     `<span>Net Debt <b>${{fmtBig(netDebt)}}</b></span>`
+             +     `<span>Net Debt <b>${{fmtBig(netDebt)}}</b> ${{cur||''}}</span>`
              +     `<a class="src" href="${{url}}" target="_blank" rel="noopener">source · ${{asof || 'TTM'}}</a>`
              +   `</div>`
              +   `<div class="dcf-slider-row">`
@@ -2730,10 +3087,34 @@ _HTML_TEMPLATE = """<!doctype html>
         const dcf    = DCF_DATA[ticker];
         if (!dcf || dcf.fcf_ttm == null) return;   // 空态卡不重算
         const snap    = SNAPSHOT[ticker] || {{}};
-        const fcf0    = dcf.fcf_ttm;
+        const cur       = (dcf && dcf.currency) || snap.currency || '';
+        const reportCcy = dcf.report_currency || '';
+        const fx        = (typeof dcf.fx_to_quote === 'number' && isFinite(dcf.fx_to_quote))
+                          ? dcf.fx_to_quote : 1.0;
+        const needFx    = reportCcy && cur && reportCcy !== cur && Math.abs(fx - 1) > 1e-9;
+        const fcf0Orig = dcf.fcf_ttm;               // 报表原币 FCF₀
+        const fcf0    = fcf0Orig * fx;              // 换算后的报价币 FCF₀ (与 price/netDebt 同币)
         const shares  = snap.shares;
         const netDebt = (snap.debt || 0) - (snap.cash || 0);
         const price   = snap.close;
+
+        // 币种说明块 (追加到每格 tooltip 末尾): 说明 FCF₀ 是否被换算过, 用了什么汇率
+        // 学术假设明确写出, 让用户知道未来所有年份都用今日即期
+        let currencyTip = '';
+        if (needFx) {{
+          const fxAsofTxt   = dcf.fx_asof   || 'n/a';
+          const fxSourceTxt = dcf.fx_source || '反算';
+          currencyTip = `\n────── Currency ──────`
+                     + `\nReport ccy: ${{reportCcy}}   (FCF 原币)`
+                     + `\nQuote ccy:  ${{cur}}   (股价 / 净债务)`
+                     + `\nFX (spot):  1 ${{reportCcy}} ≈ ${{fx.toFixed(4)}} ${{cur}}`
+                     + `\nFX asof:    ${{fxAsofTxt}}`
+                     + `\nFX source:  ${{fxSourceTxt}}`
+                     + `\n假设:       未来所有年份汇率恒定 = 今日即期`;
+        }} else if (dcf.fx_note) {{
+          // 报表币 != 报价币, 但反算失败, 明确警告用户 DCF 结果可能失真
+          currencyTip = `\n────── Currency ──────\n${{dcf.fx_note}}`;
+        }}
         // 读滑块
         const slider = cardEl.querySelector('.dcf-g-slider');
         const gPct   = slider ? parseFloat(slider.value) : (DCF_G_DEFAULT * 100);
@@ -2744,10 +3125,13 @@ _HTML_TEMPLATE = """<!doctype html>
         const nE = cardEl.querySelector('.dcf-n');
         if (nE) nE.textContent = String(N);
 
-        // 计算 1/3/5 年历史 CAGR (用于 tooltip)
-        const cagr1 = fcfCagrPastN(dcf.fcf_series, 1);
-        const cagr3 = fcfCagrPastN(dcf.fcf_series, 3);
-        const cagr5 = fcfCagrPastN(dcf.fcf_series, 5);
+        // 计算 1/3/5 年历史 CAGR (用于 tooltip); 优先按 fcf_dates 精确匹配 N 年前那期
+        const freq  = dcf.frequency || 'quarterly';
+        const dts   = dcf.fcf_dates || [];
+        const freqLabel = (freq === 'annual') ? '年度' : (freq === 'semiannual' ? '半年度' : '季度');
+        const cagr1 = fcfCagrPastN(dcf.fcf_series, 1, dts, freq);
+        const cagr3 = fcfCagrPastN(dcf.fcf_series, 3, dts, freq);
+        const cagr5 = fcfCagrPastN(dcf.fcf_series, 5, dts, freq);
         // 当前 N 对应的历史 CAGR (决定是否插入 actual 行)
         const cagrCur = (N === 1) ? cagr1 : (N === 3 ? cagr3 : cagr5);
         // 参考列 tooltip - 显示三档 CAGR + 明确的计算方法说明
@@ -2760,7 +3144,7 @@ _HTML_TEMPLATE = """<!doctype html>
           return v.toFixed(2);
         }}
         function cagrLabel(cg, N) {{
-          if (cg == null) return `N/A (数据不足 ${{N*4}} 期)`;
+          if (cg == null) return `N/A (数据不足 ${{N}} 年)`;
           if (cg.nm) {{
             // 明确告诉用户是哪个端点为负 -> 触发 n/m
             if (cg.nmReason === 'now')  return `n/m (当前 TTM = ${{bn(cg.now)}} ≤ 0)`;
@@ -2770,21 +3154,28 @@ _HTML_TEMPLATE = """<!doctype html>
           const pct = (cg.cagr >= 0 ? '+' : '') + (cg.cagr * 100).toFixed(1) + '%';
           return `${{pct}}  (${{bn(cg.then)}} → ${{bn(cg.now)}})`;
         }}
-        // 5Y 实际跨度 4.75 年 (19 个季度), 在 tooltip 里如实标注
+        // 采样口径: 优先按 fcf_dates 精确匹配, 否则按 freq 粗略步长
+        const seriesLen = (dcf.fcf_series || []).length;
+        const sampleDescr =
+              (dts && dts.length === seriesLen && dts[0])
+            ? `按 ${{freqLabel}} TTM 序列, 根据 datekey 匹配“最接近 N 年前”那期`
+            : `按 ${{freqLabel}} TTM 序列, 升序下标定位`;
+        function idxOf(cg) {{ return (cg && cg.startIdx != null) ? cg.startIdx : '?'; }}
+        function yrsOf(cg) {{ return (cg && cg.years != null) ? cg.years.toFixed(2) : '?'; }}
         const actualTip =
             `Past FCF CAGR — 端点法\n`
           + `公式:  CAGR = (FCF₀ / FCF₋ₙ)^(1/N) − 1\n`
-          + `采样:  季度 TTM 序列, 首值 = 最新, 尾值 = N 年前那个季度\n`
-          + `        1Y ← series[4]   (4 季度前)\n`
-          + `        3Y ← series[12]  (12 季度前)\n`
-          + `        5Y ← series[19]  (19 季度前 ≈ 4.75 年)\n`
+          + `采样:  ${{sampleDescr}}\n`
+          + `        1Y ← series[${{idxOf(cagr1)}}]  (实际跨度 ${{yrsOf(cagr1)}} 年)\n`
+          + `        3Y ← series[${{idxOf(cagr3)}}]  (实际跨度 ${{yrsOf(cagr3)}} 年)\n`
+          + `        5Y ← series[${{idxOf(cagr5)}}]  (实际跨度 ${{yrsOf(cagr5)}} 年)\n`
           + `\n`
           + `  1y: ${{cagrLabel(cagr1, 1)}}\n`
           + `  3y: ${{cagrLabel(cagr3, 3)}}\n`
           + `  5y: ${{cagrLabel(cagr5, 5)}}\n`
           + `\n`
           + `n/m: 端点 ≤ 0 时 CAGR 几何无意义 (跨零点)\n`
-          + `N/A: 季度 TTM 序列长度不足`;
+          + `N/A: ${{freqLabel}} TTM 序列长度不足 N 年`;
 
         // 构造完整行列表: 常规整数档 + 可能的 actual 插值行
         // Actual g 处理策略:
@@ -2905,7 +3296,10 @@ _HTML_TEMPLATE = """<!doctype html>
               const sharesTxt  = fmtBig(shares);
               const tip = `WACC=${{(w*100).toFixed(0)}}%, g=${{gLabel}}%${{actualSuffix}}, G=${{gPct.toFixed(1)}}%, N=${{N}}y`
                         + `\n────── Cash Flow ──────`
-                        + `\nFCF₀        ${{fmtBig(fcf0)}}`
+                        + (needFx
+                            ? `\nFCF₀ (raw)  ${{fmtBig(fcf0Orig)}} ${{reportCcy}}`
+                            + `\nFCF₀ (${{cur}})  ${{fmtBig(fcf0)}}   = FCF₀ (raw) × ${{fx.toFixed(4)}}`
+                            : `\nFCF₀        ${{fmtBig(fcf0)}}`)
                         + `\nFCF_N       ${{fmtBig(res.fcfN)}}   = FCF₀·(1+g)^N`
                         + `\n────── Present Value ──────`
                         + `\n显式期 PV   ${{fmtBig(res.pv)}}   (Σ FCF_t/(1+WACC)^t)`
@@ -2918,6 +3312,7 @@ _HTML_TEMPLATE = """<!doctype html>
                         + `\nFair value: ${{fmtMoney(fv)}}`
                         + `\nCurrent:    ${{fmtMoney(price)}}`
                         + `\nUpside:     ${{upTxt}}`
+                        + currencyTip
                         + (row.outOfRange ? `\n\n⚠ 此行 g 超出常规网格 [0%, 10%], 仅供参考` : '');
               html += `<td class="hm" style="background:${{bg}}" title="${{tip}}">${{upTxt}}</td>`;
               // 记录中位 (WACC=8%, g=5%) — 只从整数档取
@@ -3149,6 +3544,39 @@ _HTML_TEMPLATE = """<!doctype html>
             `因此 <b>P/E 曲线不受资本结构变化影响</b>，而 <b>EV/EBIT 早期点</b>会因股本 / 债务 / 现金随时间变化而存在偏差，仅供参考。<br/>` +
             `<code>${{FORMULA_HTML[currentMetric]}}</code>`
           );
+        }}
+        // FX-CONVERTED 提示: 报表币 != 报价币 的港股 (如 9992/9633/0700, 报表 CNY / 报价 HKD),
+        // 1Y 曲线的 EPS/EBIT 已按 fx_to_quote 换算至报价币, 避免分子(HKD)分母(CNY)错配。
+        // 只有在 range=1Y 且有个股做过换算时才显示 (3Y/5Y 走站点成品比值, 无币种问题)。
+        if (rmeta.computed && stockSelected.length > 0) {{
+          const fxLines = [];
+          for (const t of stockSelected) {{
+            const d = (typeof DCF_DATA !== 'undefined') ? DCF_DATA[t] : null;
+            if (!d) continue;
+            const fx = (typeof d.fx_to_quote === 'number') ? d.fx_to_quote : 1.0;
+            const rc = d.report_currency || '';
+            const qc = d.currency        || '';
+            if (fx && fx !== 1.0 && rc && qc && rc !== qc) {{
+              const asof = d.fx_asof || 'n/a';
+              fxLines.push(
+                `<b>${{t}}</b>: 1 ${{rc}} ≈ ${{fx.toFixed(4)}} ${{qc}} ` +
+                `<span style="color:var(--muted)">(asof ${{asof}})</span>`
+              );
+            }}
+          }}
+          if (fxLines.length) {{
+            notes.push(
+              `<span class="cf-tag">FX-CONVERTED</span>` +
+              `以下港股<b>报表币 ≠ 报价币</b>，1Y 曲线的 EPS<sub>TTM</sub> / EBIT<sub>TTM</sub>` +
+              `已按<b>今日即期汇率</b>换算至报价币（等价于假设过去一年汇率恒定），` +
+              `以确保分子（股价 / EV）与分母（盈利）币种一致：<br/>` +
+              fxLines.join('<br/>') +
+              `<br/><span style="color:var(--muted)">` +
+              `汇率来源：从 stockanalysis 同一时点 statistics(报价币) ÷ financials(报表原币) 反算隐含即期。` +
+              `曲线最右端为站点官方 TTM 快照（比值本身已在报价币口径），未参与换算。` +
+              `</span>`
+            );
+          }}
         }}
         // 选中的 ETF 用的是指数代理 P/E，明确告知用户
         const etfSelected = Array.from(selected.keys()).filter(t => PE_SOURCE[t] && PE_SOURCE[t].indexOf('Index') >= 0);
@@ -3454,12 +3882,38 @@ _HTML_TEMPLATE = """<!doctype html>
       }});
       window.addEventListener('resize', () => {{ if (selected.size) render(); }});
 
-      // ---- 给指定列的单元格追加数据源 tooltip ----
-      // 按表头文本定位目标列, 再对每行 data-ticker 查 sourceMap, 命中就写 title + 加视觉提示 class.
-      // 当前用于四列: EPS Growth (3-5Y Est) / ROE / P/E (TTM) / P/E (Fwd).
-      // 三列 ETF 专属 (EPS Growth / ROE / P/E Fwd), P/E (TTM) 个股 + ETF 都有.
-      function annotateColSource(headerText, sourceMap) {{
+      // ---- 给指定列的单元格追加"数据源信息按钮 (ⓘ)" ----
+      // 按表头文本定位目标列, 再对每行 data-ticker 查 sourceMap / urlMap:
+      //   sourceMap[sym] -> 悬停提示文本 (Source: ...)
+      //   urlMap[sym]    -> 点击跳转 URL (新标签页打开)
+      // 命中就在单元格右上角插入一个圆形 ⓘ <a> 按钮, 同时给 td 加 has-src 类
+      // 以启用 position: relative。
+      // 当前用于四列 ETF: EPS Growth (3-5Y Est) / ROE / P/E (TTM) / P/E (Fwd).
+      // 个股所有数据列 (Close / AsOf / MarketCap ... PEG) 走下面的 annotateStockCols.
+      function attachSrcInfo(cell, label, url) {{
+        if (!cell || !label) return;
+        // 避免同一单元格重复挂载
+        if (cell.querySelector('a.src-info')) return;
+        const a = document.createElement('a');
+        a.className = 'src-info';
+        a.textContent = 'i';
+        a.setAttribute('title', 'Source: ' + label + ' (click to open)');
+        a.setAttribute('aria-label', 'Data source: ' + label);
+        if (url) {{
+          a.href = url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }} else {{
+          a.href = 'javascript:void(0)';
+          a.style.cursor = 'help';
+        }}
+        cell.classList.add('has-src');
+        cell.insertBefore(a, cell.firstChild);
+      }}
+
+      function annotateColSource(headerText, sourceMap, urlMap) {{
         if (!sourceMap || Object.keys(sourceMap).length === 0) return;
+        urlMap = urlMap || {{}};
         document.querySelectorAll('table').forEach(tbl => {{
           const ths = tbl.querySelectorAll('thead th');
           let colIdx = -1;
@@ -3475,16 +3929,111 @@ _HTML_TEMPLATE = """<!doctype html>
             if (!label) return;
             const cell = tr.children[colIdx];
             if (!cell) return;
-            // 避免重复挂载 (每列独立, 不会互相覆盖 title)
-            cell.setAttribute('title', 'Source: ' + label);
-            cell.classList.add('has-src');
+            attachSrcInfo(cell, label, urlMap[sym]);
           }});
         }});
       }}
-      annotateColSource('P/E (Fwd)',              FWD_SOURCE);
-      annotateColSource('P/E (TTM)',              PE_TTM_SOURCE);
-      annotateColSource('EPS Growth (3-5Y Est)',  EPS_GROWTH_SOURCE);
-      annotateColSource('ROE',                    ROE_SOURCE);
+
+      // ---- 计算 ETF 数据源对应的跳转 URL ----
+      // 由 label 文本关键字反推源网页 (发行商官方 / 指数代理), 无需在后端再维护一份 URL 表.
+      // 匹配失败返回 null, 前端会退化为"仅悬停提示, 不可点击"。
+      function etfSrcUrl(sym, label) {{
+        if (!label) return null;
+        const s = label.toLowerCase();
+        if (s.includes('ssga')) {{
+          // SSGA SPYM (S&P 500) 官方 ETF 页
+          return 'https://www.ssga.com/us/en/individual/etfs/spdr-portfolio-sp-500-etf-spym';
+        }}
+        if (s.includes('invesco')) {{
+          // Invesco QQQM (Nasdaq 100) 官方 ETF 页
+          return 'https://www.invesco.com/us/financial-products/etfs/product-detail?audienceType=Investor&ticker=QQQM';
+        }}
+        if (s.includes('vanguard')) {{
+          // Vanguard 官方页 (VUG 用 VUG 主页, SPYM/VOO proxy 走 VOO)
+          if (sym === 'VUG') return 'https://investor.vanguard.com/investment-products/etfs/profile/vug';
+          return 'https://investor.vanguard.com/investment-products/etfs/profile/voo';
+        }}
+        if (s.includes('multpl')) {{
+          return 'https://www.multpl.com/s-p-500-pe-ratio/table/by-month';
+        }}
+        if (s.includes('siblis')) {{
+          return 'https://siblisresearch.com/data/nasdaq-100-pe-ratio/';
+        }}
+        if (s.includes('stockanalysis')) {{
+          // ETF 加权 P/E (TTM) 来自 stockanalysis.com/etf/{{t}}/
+          return 'https://stockanalysis.com/etf/' + sym.toLowerCase() + '/';
+        }}
+        return null;
+      }}
+
+      // ---- 给个股 (US + HK) 数据列挂载数据源 ⓘ 按钮 ----
+      // 个股数据统一走 stockanalysis.com, 按列语义走 statistics 页:
+      //   MarketCap / EV / Debt / Cash&STI /
+      //     EBIT(TTM) / EV/EBIT / EV/EBITDA /
+      //     P/E(TTM) / P/E(Fwd) / PEG      -> statistics 页
+      // 注: Close / As Of 不挂载 ⓘ (报价本身没有额外的 "数据来源" 值得跳转,
+      //     且顶部大号价格块与表格里的收盘价语义一致, 挂 ⓘ 反而累赘).
+      // HK 与 US 路径不同, 由 ticker 是否纯数字判断 (港股 4 位数字代码 e.g. 0700).
+      function stockSrcStats(sym) {{        if (/^\\d+$/.test(sym)) return 'https://stockanalysis.com/quote/hkg/' + sym + '/statistics/';
+        return 'https://stockanalysis.com/stocks/' + sym.toLowerCase() + '/statistics/';
+      }}
+      // 表头文本 -> (label, url 类型) ; url 类型: 'stats' (目前全部指向 statistics 页)
+      const STOCK_COL_SPEC = [
+        ['Market Cap',            'stockanalysis.com · Statistics',             'stats'],
+        ['EV',                    'stockanalysis.com · Statistics',             'stats'],
+        ['Total Debt',            'stockanalysis.com · Statistics',             'stats'],
+        ['Cash + STI',            'stockanalysis.com · Statistics',             'stats'],
+        ['EBIT (TTM)',            'stockanalysis.com · Statistics',             'stats'],
+        ['EV / EBIT',             'stockanalysis.com · Statistics',             'stats'],
+        ['EV / EBITDA',           'stockanalysis.com · Statistics',             'stats'],
+        ['P/E (TTM)',             'stockanalysis.com · Statistics',             'stats'],
+        ['P/E (Fwd)',             'stockanalysis.com · Statistics',             'stats'],
+        ['PEG',                   'stockanalysis.com · Statistics',             'stats'],
+      ];
+      function annotateStockCols() {{
+        document.querySelectorAll('table').forEach(tbl => {{
+          const ths = tbl.querySelectorAll('thead th');
+          // 建立"表头文本 -> 列索引"字典
+          const headerIdx = {{}};
+          ths.forEach((th, i) => {{
+            const txt = (th.textContent || '').replace(/\\s+/g, ' ').trim();
+            headerIdx[txt] = i;
+          }});
+          tbl.querySelectorAll('tbody tr[data-ticker]').forEach(tr => {{
+            const sym = tr.getAttribute('data-ticker');
+            if (ETF_SET.has(sym)) return;  // ETF 走各自的 SOURCE map, 不走通用规则
+            STOCK_COL_SPEC.forEach(([header, label, kind]) => {{
+              const idx = headerIdx[header];
+              if (idx == null) return;
+              const cell = tr.children[idx];
+              if (!cell) return;
+              // 若该单元格为空 (—), 跳过挂载, 避免"空数据"上出现指向 stats 页的信息按钮误导
+              const txt = (cell.textContent || '').trim();
+              if (!txt || txt === '—' || txt === '-' || txt === 'N/A') return;
+              // 当前所有列都走 statistics; kind 字段保留以便未来扩展 (e.g. financials 页).
+              const url = stockSrcStats(sym);
+              attachSrcInfo(cell, label, url);
+            }});
+          }});
+        }});
+      }}
+
+      // ---- ETF 已有 SOURCE map 走 annotateColSource + etfSrcUrl 反推 URL ----
+      // 为每列构造 ticker -> url 表
+      function buildUrlMap(sourceMap) {{
+        const out = {{}};
+        Object.keys(sourceMap).forEach(sym => {{
+          const u = etfSrcUrl(sym, sourceMap[sym]);
+          if (u) out[sym] = u;
+        }});
+        return out;
+      }}
+      annotateColSource('P/E (Fwd)',             FWD_SOURCE,        buildUrlMap(FWD_SOURCE));
+      annotateColSource('P/E (TTM)',             PE_TTM_SOURCE,     buildUrlMap(PE_TTM_SOURCE));
+      annotateColSource('EPS Growth (3-5Y Est)', EPS_GROWTH_SOURCE, buildUrlMap(EPS_GROWTH_SOURCE));
+      annotateColSource('ROE',                   ROE_SOURCE,        buildUrlMap(ROE_SOURCE));
+      // 个股表格所有数据列一次性挂载
+      annotateStockCols();
     }})();
   </script>
 </body>
@@ -3819,6 +4368,42 @@ def main() -> int:
         r.dcf = _fetch_dcf(r.symbol, "US", "USD")
     for r in hk_rows:
         r.dcf = _fetch_dcf(r.symbol, "HK", "HKD")
+
+    # ------------------------------------------------------------------
+    # 1Y 曲线的币种一致性修正 (报表币 != 报价币 的港股)
+    # ------------------------------------------------------------------
+    # 背景: _build_1y_history 里 P/E_week 与 EV/EBIT_week 的公式为
+    #     P/E_week    = price(HKD) ÷ EPS_TTM(报表币)
+    #     EV_week     = price(HKD) × shares + debt(HKD) − cash(HKD)
+    #     EV/EBIT_wk  = EV(HKD)   ÷ EBIT_TTM(报表币)
+    # 对于报表币 = CNY 的港股 (9992/9633/0700 等), 分子分母币种错配, 会让 1Y
+    # 历史点被系统性抬高 ≈ fx_to_quote 倍 (2026 年 CNY/HKD ≈ 1.11-1.14)。
+    # 修复: 把 EPS/EBIT_TTM 一次性乘 fx_to_quote 换算到报价币, 数学等价于
+    # "假设过去一年汇率恒定 = 今日即期" — 与 DCF 用的同一 fx 前提保持一致。
+    # 注: 序列最右端 (今日快照) 已在 fetch_snapshot 里用 statistics 页官方
+    # PE/EV_EBIT 覆盖 (成品比值, 币种自动一致), 故只需修正历史点 [0..-2]。
+    for r in hk_rows:
+        if not r.dcf:
+            continue
+        fx = r.dcf.get("fx_to_quote")
+        if not fx or fx == 1.0:
+            continue
+        # 分母 = EPS/EBIT × fx  =>  比值需要再除以 fx  (等价)
+        if r.pe_history_1y and len(r.pe_history_1y) >= 2:
+            r.pe_history_1y = (
+                [(d, v / fx) for d, v in r.pe_history_1y[:-1]]
+                + [r.pe_history_1y[-1]]
+            )
+        if r.ev_ebit_history_1y and len(r.ev_ebit_history_1y) >= 2:
+            r.ev_ebit_history_1y = (
+                [(d, v / fx) for d, v in r.ev_ebit_history_1y[:-1]]
+                + [r.ev_ebit_history_1y[-1]]
+            )
+        print(
+            f"  .. {r.symbol}: 1Y series FX-adjusted "
+            f"(EPS/EBIT × {fx:.4f} => same currency as price)",
+            file=sys.stderr,
+        )
 
     now = datetime.now()
     html_doc = build_html_report(
