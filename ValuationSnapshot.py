@@ -18,8 +18,7 @@
     ETF 快照页：https://stockanalysis.com/etf/{ticker}/  (peRatio / aum 等)
     ETF 历史 P/E 曲线走"指数代理", 因 ETF 组合层面无公开时序:
         SPYM -> S&P 500        https://www.multpl.com/s-p-500-pe-ratio/table/by-month  (月频, 50+ 年)
-        QQQM -> Nasdaq 100     https://siblisresearch.com/data/nasdaq-100-pe-ratio/    (季频, 免费部分 ~10 期)
-        VUG  -> CRSP US LC Growth: 无公开历史 P/E 源, 曲线保持 N/A
+        QQQM -> Nasdaq 100     https://siblisresearch.com/data/nasdaq-100-pe-ratio/    (月度最新 + 历年 Dec, ~10+ 期)
     这些曲线严格上是"指数 P/E"而非"ETF 组合 P/E", 前端会在图表副标题里明确标注每个 ticker 的数据源。
 
 依赖：仅标准库（urllib + re），无需第三方包。
@@ -96,20 +95,17 @@ HKStocks = [
 # ETF 走独立的 /etf/{t}/ 主页, 主页 HTML 里内嵌一段 JSON 汇总了 ETF 层面的关键字段
 # (peRatio / aum / nav / expenseRatio / dividendYield / sharesOut / dps / beta 等)。
 # 我们把 peRatio 填入 PE 列, aum 填入 MarketCap 列; 其余对 ETF 语义上不适用的字段
-# (EV/EBIT, EV/EBITDA, PEG, EBIT, Debt, Cash) 一律保留为 None -> 前端显示 "-"。
+# (EV/EBIT, EV/EBITDA, EBIT, Debt, Cash) 一律保留为 None -> 前端显示 "-"。
 #
 # Forward P/E ("PE Fwd" 列) 走各自的**发行商官方**基金 characteristics 数据源:
 #   SPYM -> SSGA 官网 SPYM SSR HTML (weighted harmonic FY1, FactSet Estimates, 月频)
 #   QQQM -> Invesco dng-api JSON      (weighted harmonic forward P/E, 日频)
-#   VUG  -> Vanguard characteristics endpoint 未公开加权前瞻 P/E, 保持 None
 #
 # 历史 P/E 曲线走"指数代理": ETF 组合层面无公开时序, 因此改抓 ETF 所跟踪指数的历史 P/E。
 #   SPYM -> S&P 500        (multpl.com, 月频, 50+ 年)
-#   QQQM -> Nasdaq 100     (siblisresearch.com, 季频, 免费部分 ~10 期)
-#   VUG  -> CRSP US LC Growth: 无公开源, 曲线保持 N/A
+#   QQQM -> Nasdaq 100     (siblisresearch.com, 月度最新 + 历年 Dec, ~10+ 期)
 # EV/EBIT 时序对 ETF 一律不适用, 保持 N/A。
 ETFs = [
-    "VUG",     # Vanguard Growth ETF          (CRSP US LC Growth - no public PE history)
     "QQQM",    # Invesco NASDAQ-100 ETF       (Nasdaq 100 index proxy)
     "SPYM",    # SPDR Portfolio S&P 500 ETF   (S&P 500 index proxy)
 ]
@@ -124,7 +120,6 @@ ETF_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
     "QQQM": ("Nasdaq 100 Index P/E (TTM) · siblisresearch.com",
              "https://siblisresearch.com/data/nasdaq-100-pe-ratio/",
              "siblis_ndx"),
-    "VUG":  None,   # CRSP US Large Cap Growth: no public historical PE source
 }
 
 # ETF -> 当前 Forward P/E 数据源 (发行商官方最新月度/日度公布值)。None 表示未开放。
@@ -137,25 +132,6 @@ ETF_FWD_PE_SOURCE: dict[str, tuple[str, str, str] | None] = {
     "QQQM": ("Invesco dng-api · forwardPriceToEarningsRatio (weighted harmonic)",
              "46138G649",   # QQQM CUSIP; API 通过 idType=cusip 查询
              "invesco_api"),
-    "VUG":  None,   # Vanguard characteristics endpoint 未开放加权前瞻 P/E
-}
-
-# ETF -> Vanguard characteristic API 数据源。Vanguard 官方前端 (investor.vanguard.com)
-# 唯一公布的组合层面口径, 只提供 TTM P/E + EPS growth + ROE (无 forward P/E)。
-# 这里独立于 ETF_FWD_PE_SOURCE 是因为 SSGA / Invesco 提供 forward, Vanguard 只有 TTM,
-# 分开管理可以避免语义混淆。key = ETF ticker (upper), value = (label, ticker_for_api)。
-ETF_VANGUARD_SOURCE: dict[str, tuple[str, str] | None] = {
-    "VUG":  ("Vanguard · Portfolio characteristics (Morningstar equity, monthly)",
-             "vug"),
-    # SPYM (SPDR S&P 500) 与 VOO (Vanguard S&P 500) 追踪同一指数 (S&P 500) 且均为
-    # 全复制策略, 成分股 + 权重差异 < 0.05%, 组合层面加权 ROE 数值应基本一致。
-    # SSGA 官方页面 (含 Fund + Index Characteristics 两个面板) 不发布 ROE 字段,
-    # 这里用 VOO 的 Vanguard characteristic API 数据作为代理回填 SPYM 的 ROE 列;
-    # 由回填逻辑保证仅在原字段为空时写入, 不会覆盖 SSGA 原生 EPS Growth (前瞻口径,
-    # 与 Vanguard 的 TTM 口径不同)。VUG 追踪 CRSP US Large-Cap Growth, 与任何
-    # S&P 500 ETF 都不同源, 保持独立。
-    "SPYM": ("Vanguard · VOO Portfolio characteristics (S&P 500 proxy)",
-             "voo"),
 }
 
 # ---------- 公司 logo 域名映射 ----------
@@ -185,7 +161,6 @@ LOGO_DOMAIN: dict[str, str] = {
     "1211":  "byd.com",
     "9633":  "nongfuspring.com",
     # ETFs
-    "VUG":   "vanguard.com",
     "QQQM":  "invesco.com",
     "SPYM":  "ssga.com",
 }
@@ -197,11 +172,10 @@ LOGO_DOMAIN: dict[str, str] = {
 #
 # 说明:
 #   epsGrowth3To5Y / returnOnEquity 是 ETF 专用列 (个股不填):
-#     - SPYM: SSGA HTML 提供 "Est. 3-5 Year EPS Growth", 无 ROE
+#     - SPYM: SSGA HTML 提供 "Est. 3-5 Year EPS Growth", 无 ROE (SSGA 官方不发布)
 #     - QQQM: Invesco API 提供 returnOnEquity, 无 EPS Growth
-#     - VUG : 两者皆无
 #   在 render_section_html 里 ETF section 只展示 [PE, PE Fwd, EPS Growth, ROE] 四列,
-#   其它列 (MarketCap/EV/Debt/Cash/EBIT/EV·EBIT/EV·EBITDA/PEG) 对 ETF 语义上不成立, 直接不渲染。
+#   其它列 (MarketCap/EV/Debt/Cash/EBIT/EV·EBIT/EV·EBITDA) 对 ETF 语义上不成立, 直接不渲染。
 FIELDS = {
     "marketcap":         "MarketCap",
     "enterpriseValue":   "EV",
@@ -212,7 +186,6 @@ FIELDS = {
     "evEbitda":          "EV/EBITDA",
     "pe":                "PE",
     "peForward":         "PE Fwd",
-    "pegRatio":          "PEG",
     "epsGrowth3To5Y":    "EPS Growth (3-5Y Est)",
     "returnOnEquity":    "ROE",
 }
@@ -587,42 +560,127 @@ def parse_multpl_spx_pe(html: str, limit: int = 60) -> list[tuple[str, float]]:
     return out
 
 
-# siblisresearch.com 的 Nasdaq 100 页表格结构：<table class="supsystic-table ...">
-# 首行是表头 (Date / NASDAQ 100 Price / P/E (TTM) Ratio / EPS (TTM) / Forward P/E / EPS Fwd / CAPE)
-# 免费版只暴露最近 ~10 个季末点，Date 形如 "6/30/2026"。
-def parse_siblis_ndx_pe(html: str, limit: int = 60) -> list[tuple[str, float]]:
-    """解析 siblisresearch.com Nasdaq-100 P/E 表，返回 [(date_iso, pe), ...] 旧->新序列。
+# siblisresearch.com 的 Nasdaq 100 页在 2026 年前后从 WordPress (supsystic 插件)
+# 迁到 Astro, 老页面的 <table class="supsystic-table ...">+季末行结构已不复存在。
+# 新页面结构 (2026-11 实测):
+#   - 页面上有多个普通 <table>, 其中“历史表”第一行表头为:
+#       Month | U.S. Large Cap | NASDAQ 100 | Russell 2000 | Russell 1000 Growth | Russell 1000 Value
+#     NASDAQ 100 的 P/E (TTM) 位于列索引 2 (0-based)。
+#   - 行结构: <th scope="row">Sept 2026</th><td class="n"><span>35.09</span></td>...
+#   - 日期格式分两种: 最近一行是 "<MonAbbr> YYYY" (如 "Sept 2026"), 其余是
+#     "YYYY <MonAbbr>" (如 "2025 Dec", 为该年末快照); 都要归一化到月末 ISO 日期。
+#   - 频率变成"最新月份点 + 历年 12 月点", 不再是季末。免费可见约 10+ 期, 覆盖 10 年。
+#   - 偶有 "Negative" 字符串占位 (如 Russell 2000 2020 Dec), 对 NDX 列目前没出现过,
+#     但解析器仍需健壮跳过非数字值。
 
-    - 数据源（免费部分）：https://siblisresearch.com/data/nasdaq-100-pe-ratio/
-    - 免费版只有约 10 个季末点，无法完整覆盖 5Y；`limit` 起截断作用（够 3Y 曲线）。
+# 月份缩写 -> 月号。siblisresearch 页面偶尔用非标准 "Sept" (而非 "Sep"), 显式枚举以兼容。
+_MON_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "june": 6,
+    "jul": 7, "july": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _parse_siblis_date(raw: str) -> dt.date | None:
+    """接受 siblisresearch 新版表的日期字符串, 归一化为该月月末日期。
+
+    支持的形式:
+        "Sept 2026"   -> 2026-09-30   ("最近一期"行, 月份缩写在前)
+        "Sep 2026"    -> 2026-09-30   (标准三字母缩写, 以防站点以后统一)
+        "2025 Dec"    -> 2025-12-31   (历年年末行, 年在前)
+        "6/30/2026"   -> 2026-06-30   (兼容旧 WordPress 版 M/D/Y, 以防回滚)
     """
-    m = re.search(
-        r'<table[^>]*class="[^"]*supsystic-table[^"]*"[^>]*>(.*?)</table>',
-        html,
-        re.DOTALL,
-    )
-    if not m:
-        return []
-    body = m.group(1)
-    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', body, re.DOTALL)
-    if len(rows) < 2:
+    s = raw.strip()
+    if not s:
+        return None
+
+    # 旧版 M/D/Y 兼容路径
+    if "/" in s:
+        try:
+            return dt.datetime.strptime(s, "%m/%d/%Y").date()
+        except ValueError:
+            return None
+
+    parts = s.split()
+    if len(parts) != 2:
+        return None
+    a, b = parts
+    # 判定哪一个 token 是年, 哪一个是月
+    if a.isdigit() and len(a) == 4:
+        year_tok, mon_tok = a, b
+    elif b.isdigit() and len(b) == 4:
+        year_tok, mon_tok = b, a
+    else:
+        return None
+    try:
+        year = int(year_tok)
+    except ValueError:
+        return None
+    mon = _MON_ABBR.get(mon_tok.lower().rstrip("."))
+    if mon is None:
+        return None
+
+    # 月末日 = 下月 1 号 - 1 天 (无需外部库)
+    if mon == 12:
+        last_day = dt.date(year, 12, 31)
+    else:
+        last_day = dt.date(year, mon + 1, 1) - dt.timedelta(days=1)
+    return last_day
+
+
+def parse_siblis_ndx_pe(html: str, limit: int = 60) -> list[tuple[str, float]]:
+    """解析 siblisresearch.com Nasdaq-100 P/E 表, 返回 [(date_iso, pe), ...] 旧->新序列。
+
+    - 数据源 (免费部分): https://siblisresearch.com/data/nasdaq-100-pe-ratio/
+    - 2026 年起站点改版: 频率变为"最新月份 + 历年 12 月", 免费可见约 10+ 期。
+    - 定位历史表的办法: 遍历页面上所有 <table>, 找表头同时包含 "Month" 和
+      "NASDAQ 100" 列的那张; 读表头确定 NDX 所在列索引 (抗未来列顺序调整)。
+    - `limit` 起截断作用, 和旧版签名保持一致。
+    """
+    tables = re.findall(r'<table[^>]*>(.*?)</table>', html, re.DOTALL)
+    target_rows: list[str] | None = None
+    ndx_col: int = -1
+
+    def _cells_text(row_html: str) -> list[str]:
+        cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row_html, re.DOTALL)
+        return [re.sub(r'<[^>]+>|\s+', ' ', c).strip() for c in cells]
+
+    for tbl in tables:
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', tbl, re.DOTALL)
+        if len(rows) < 2:
+            continue
+        header = _cells_text(rows[0])
+        if not header:
+            continue
+        # 表头第 1 列必须是 "Month" (大小写宽松), 且其中某列是 "NASDAQ 100"
+        if header[0].strip().lower() != "month":
+            continue
+        try:
+            ndx_col = next(i for i, h in enumerate(header)
+                           if "nasdaq" in h.lower() and "100" in h)
+        except StopIteration:
+            continue
+        target_rows = rows[1:]
+        break
+
+    if not target_rows or ndx_col < 0:
         return []
 
     out: list[tuple[str, float]] = []
-    for row in rows[1:]:   # 跳过表头
-        cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
-        if len(cells) < 3:
+    for row in target_rows:
+        cells = _cells_text(row)
+        if len(cells) <= ndx_col:
             continue
-        date_raw = re.sub(r'<[^>]+>|\s+', ' ', cells[0]).strip()
-        pe_raw   = re.sub(r'<[^>]+>|\s+', ' ', cells[2]).strip()
+        d = _parse_siblis_date(cells[0])
+        if d is None:
+            continue
+        pe_raw = cells[ndx_col].replace(",", "").strip()
         try:
-            d = dt.datetime.strptime(date_raw, "%m/%d/%Y")
-            pe = float(pe_raw.replace(",", ""))
+            pe = float(pe_raw)
         except ValueError:
-            continue
+            continue  # 跳过 "Negative" 或其他非数值占位
         out.append((d.strftime("%Y-%m-%d"), pe))
 
-    # 页面已按新->旧排列，取最近 `limit` 条并反转
+    # 页面按新->旧排列, 截断后反转为旧->新
     out = out[:limit]
     out.reverse()
     return out
@@ -759,95 +817,6 @@ def fetch_invesco_forward_pe(cusip: str) -> float | None:
     if fc is None:
         return None
     return fc.get("forward_pe")
-
-
-# ---------- 抓取：Vanguard fund characteristics（VUG 等 Vanguard ETF 官方组合层面指标） ----------
-#
-# Vanguard 前端 SPA (investor.vanguard.com) 的 characteristic 数据取自静态 JSON:
-#   https://investor.vanguard.com/investment-products/etfs/profile/api/{ticker}/characteristic
-# 返回结构 (以 VUG 为例, 2026-06-30 快照):
-#   {
-#     "equityCharacteristic": {
-#       "asOfDate": "2026-06-30T00:00:00-04:00",
-#       "shortName": "Growth ETF               ",
-#       "benchmarkShortName": "Morningstar US Large Cap Growth Index",
-#       "fund": {
-#         "earningsGrowthRate": "32.4",        # % (裸数字字符串)
-#         "medianMarketCap":     "$1.8 trillion",
-#         "numberOfStocks":      "147",
-#         "priceEarningsRatio":  "35.6x",       # TTM 加权 (Morningstar 口径)
-#         "priceBookRatio":      "12.5x",
-#         "returnOnEquity":      "36.1",        # %
-#         "turnoverRate":        "12.3",        # %
-#         "foreignHolding":      "0.2",         # %
-#         "totalNetAssets":      "$378.8 billion",
-#         ...
-#       },
-#       "benchmark": { ...同上 fields... }
-#     },
-#     "fundCharacteristic": {}, "fixedIncomeCharacteristic": {}, "moneyMarketCharacteristic": {}
-#   }
-# SSGA / Invesco 提供 forward P/E, Vanguard 只公布截至月末的 TTM P/E + EPS growth + ROE,
-# 因此本函数只回填 eps_growth / roe (以补齐 ETF 专属列), forward P/E 保持 None。
-def fetch_vanguard_fund_characteristics(ticker: str) -> dict[str, float] | None:
-    """通过 Vanguard investor.vanguard.com 前端代理 API 拿指定 ETF 的组合层面
-    characteristics (Portfolio composition -> Characteristics 面板同源)。
-
-    URL 模式:
-      https://investor.vanguard.com/investment-products/etfs/profile/api/{ticker}/characteristic
-
-    返回 dict, key 缺失表示该项在 payload 里没提供或值非法:
-      - eps_growth : earningsGrowthRate    (百分比数值, 例如 32.4 表示 32.4%)
-      - roe        : returnOnEquity        (百分比数值, 例如 36.1 表示 36.1%)
-    """
-    api = (
-        f"https://investor.vanguard.com/investment-products/etfs/profile/api/"
-        f"{ticker.lower()}/characteristic"
-    )
-    req = urllib.request.Request(api, headers={
-        "User-Agent": UA,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": f"https://investor.vanguard.com/investment-products/etfs/profile/{ticker.lower()}",
-        "Origin": "https://investor.vanguard.com",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = resp.read()
-    except Exception as e:
-        print(f"  !! Vanguard characteristic API {api} failed: {e}", file=sys.stderr)
-        return None
-    try:
-        j = json.loads(body.decode("utf-8", errors="replace"))
-    except Exception as e:
-        print(f"  !! Vanguard characteristic API parse failed: {e}", file=sys.stderr)
-        return None
-
-    fund = ((j.get("equityCharacteristic") or {}).get("fund") or {})
-    out: dict[str, float] = {}
-
-    # Vanguard 用裸数字字符串 (无 %/x 后缀), 直接 float 转换.
-    #   earningsGrowthRate "32.4" -> 32.4 (%)
-    #   returnOnEquity     "36.1" -> 36.1 (%)
-    def _to_pct(raw) -> float | None:
-        if not isinstance(raw, str):
-            return None
-        try:
-            v = float(raw.strip().rstrip("%"))
-        except ValueError:
-            return None
-        # sanity: -100 ~ +200% (增长率/ROE 都不该超出这个量级)
-        return v if -100 < v <= 200 else None
-
-    eg = _to_pct(fund.get("earningsGrowthRate"))
-    if eg is not None:
-        out["eps_growth"] = eg
-
-    roe = _to_pct(fund.get("returnOnEquity"))
-    if roe is not None:
-        out["roe"] = roe
-
-    return out
 
 
 # ---------- 解析：ratios 页（TTM 时间序列，如 PE / EV-EBIT） ----------
@@ -1711,9 +1680,8 @@ def _fetch_etf(ticker: str) -> Row:
     #   - Forward P/E     : 加权 harmonic FY1
     #   - EPS Growth 3-5Y : 加权平均 (FactSet Estimates, 仅 SSGA 发布)
     #   - ROE             : 加权平均 (仅 Invesco 发布)
-    # SPYM (SSGA HTML)     -> forward_pe, eps_growth        ; roe 保持 None
+    # SPYM (SSGA HTML)     -> forward_pe, eps_growth        ; roe 保持 None (SSGA 不发布)
     # QQQM (Invesco JSON)  -> forward_pe,           roe     ; eps_growth 保持 None
-    # VUG  (无源)          -> 三项都 None
     # Row.pe_forward_source 记录 forward-PE 的数据源标签, 前端 P/E (Fwd) 单元格 tooltip 显示出处。
     fwd_pe_source_label: str | None = None
     fwd_src = ETF_FWD_PE_SOURCE.get(ticker.upper())
@@ -1763,29 +1731,9 @@ def _fetch_etf(ticker: str) -> Row:
             else:
                 roe_source_label = fwd_label
 
-    # -------- Vanguard 官方 characteristic (VUG 等 Vanguard ETF) --------
-    # Vanguard 不发布 forward P/E, 但公布组合层面 TTM EPS growth + ROE (Morningstar 口径,
-    # 见 fetch_vanguard_fund_characteristics doc). 这里只回填 EPS growth / ROE 两项,
-    # 保留 fwd_src 分支已经填过的 forward_pe / eps_growth / roe (SSGA/Invesco 优先).
-    vg_src = ETF_VANGUARD_SOURCE.get(ticker.upper())
-    if vg_src is not None:
-        vg_label, vg_arg = vg_src
-        vc = fetch_vanguard_fund_characteristics(vg_arg)
-        if vc is not None:
-            # 仅当当前列为空时才回填 (不覆盖 SSGA/Invesco 已提供的更权威值)
-            if row[FIELDS["epsGrowth3To5Y"]] is None and "eps_growth" in vc:
-                row[FIELDS["epsGrowth3To5Y"]] = f"{vc['eps_growth']:.2f}"
-                eps_growth_source_label = vg_label
-            if row[FIELDS["returnOnEquity"]] is None and "roe" in vc:
-                row[FIELDS["returnOnEquity"]] = f"{vc['roe']:.2f}"
-                roe_source_label = vg_label
-        else:
-            print(f"  .. {ticker}: Vanguard characteristics unavailable ({vg_label})", file=sys.stderr)
-
     # -------- 指数代理: 历史 P/E 时序 --------
-    # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个季末点 (NDX 免费版), 3Y = 5Y 尾部切片，
-    # 1Y = 5Y 数组的更小尾部切片（月度 12 点 / 季度 4 点）。
-    # VUG 追踪 CRSP US LC Growth, 无公开源 -> 保持 None, 前端不显示曲线。
+    # 5Y = 最近 60 个月度点 (SPX) / 或 ~10 个月度+年度点 (NDX 免费版 2026 改版后), 3Y = 5Y 尾部切片，
+    # 1Y = 5Y 数组的更小尾部切片（月度 12 点 / NDX 则多为最近年度+当月 2 点）。
     src = ETF_PE_SOURCE.get(ticker.upper())
     if src is not None:
         label, url, parser_name = src
@@ -1800,11 +1748,11 @@ def _fetch_etf(ticker: str) -> Row:
             # 无论 1Y/3Y/5Y, 数组最右端都应当反映"当前 TTM"快照（与股票分支一致）:
             #   - 中间历史点保留数据源的日期 + 数值 (月度 SPX 或 季度 NDX)
             #   - 最右端根据"数据源最新点距今天数"分两种做法, 避免日期显得过时:
-            #     * 距今 <= STALE_DAYS: 数据源点已经足够新, 直接把它的日期改成今天 + 值改成 snap
-            #       (SPYM: multpl 每天都会更新一个"今日"点, 差 ~1 天; QQQM 6/30 之后到 9/30 之前无更新时不适用)
-            #     * 距今  > STALE_DAYS: 数据源点太老, 保留原点作为"历史点"不动,
-            #       在末尾追加一个日期=今天 / 值=snap 的新点。曲线尾段会拉出一条直线,
-            #       诚实反映"数据源空档期"(QQQM 常态: 6/30 -> today 追加一个点)。
+                    #     * 距今 <= STALE_DAYS: 数据源点已经足够新, 直接把它的日期改成今天 + 值改成 snap
+                    #       (SPYM: multpl 每天都会更新一个"今日"点, 差 ~1 天; QQQM 改版后当月点通常已很新, 绝大多数情况走此分支)
+                    #     * 距今  > STALE_DAYS: 数据源点太老, 保留原点作为"历史点"不动,
+                    #       在末尾追加一个日期=今天 / 值=snap 的新点。曲线尾段会拉出一条直线,
+                    #       诚实反映"数据源空档期" (NDX 改版前常态: 6/30 -> today 追加一个点; 改版后末点是当月点, 极少触发)。
             #   snap_pe 来自 stockanalysis ETF 主页 (etf.peRatio, ETF 组合当日加权 P/E),
             #   保证 1Y/3Y/5Y 三条曲线的最右点都 = 表格里 P/E 列的当前值。
             snap_pe = _to_float(pe_raw) if pe_raw is not None else None
@@ -1829,23 +1777,45 @@ def _fetch_etf(ticker: str) -> Row:
                 appended_snap = False
 
             r = Row(ticker, row)
-            r.pe_history = pe_hist
-            # 3Y / 1Y 尾部切片: 数据源频率 × 时间跨度 = 应有的季末/月末点数。
-            # 若走了"追加分支"(appended_snap=True), 说明末点是"今日快照"而非季末/月末,
-            # 应额外多取 1 点, 保证时间跨度真的覆盖过去 3Y / 1Y。
-            # 例: QQQM 1Y = 4 个季末 (含最近 6/30) + 1 个 today 快照 = 5 个点。
-            #     SPYM 走"覆盖分支", 12 个月度点里最后一个已经是 today, 无需+1。
-            extra = 1 if appended_snap else 0
-            if parser_name == "multpl_spx":
-                take_3y = 36 + extra
-                take_1y = 12 + extra
-                r.pe_history_3y = pe_hist[-take_3y:] if len(pe_hist) > take_3y else list(pe_hist)
-                r.pe_history_1y = pe_hist[-take_1y:] if len(pe_hist) > take_1y else list(pe_hist)
-            else:
-                take_3y = 12 + extra
-                take_1y = 4  + extra
-                r.pe_history_3y = pe_hist[-take_3y:] if len(pe_hist) > take_3y else list(pe_hist)
-                r.pe_history_1y = pe_hist[-take_1y:] if len(pe_hist) > take_1y else list(pe_hist)
+            # 5Y / 3Y / 1Y 尾部切片 (全部按**时间窗口**切, 不再按点数切):
+            #   * siblis_ndx: 2026 改版后口径为"历年 Dec + 当月最新"的混合序列, 点间距非均匀
+            #     (多数年份只有 1 个 Dec 点), 共 ~11 点覆盖 ~10 年. 若按点数切:
+            #       - 5Y 会把全部 11 点吐出来 → 跨度 ~10 年
+            #       - 3Y 取 12 点 → 跨度 ~10 年
+            #     完全失真. 按时间窗口切后: 5Y 吐 5 个 Dec 点 + 当月点 (真 5 年),
+            #     3Y 吐 3 个 Dec 点 + 当月点 (真 3 年), 1Y 吐 1~2 点 (真 1 年).
+            #   * multpl_spx: 严格月频, 按时间窗口切与按点数切 (60/36/12) 结果一致, 更鲁棒,
+            #     未来若数据源频率变化不会被打回原形.
+            #   窗口内不足 2 点时兜底取尾部 2 点, 保证曲线至少能画一段.
+            def _slice_by_years(hist: list[tuple[str, float]], years: int) -> list[tuple[str, float]]:
+                """按日期窗口裁切: 保留末点往前 `years` 年内的所有点, 至少 2 点."""
+                if len(hist) <= 2:
+                    return list(hist)
+                try:
+                    last_dt = dt.date.fromisoformat(hist[-1][0])
+                except ValueError:
+                    return list(hist)
+                try:
+                    cutoff = last_dt.replace(year=last_dt.year - years)
+                except ValueError:
+                    # 处理 2/29 等罕见情况 (本脚本月末日期不会命中, 兜底)
+                    cutoff = last_dt - dt.timedelta(days=365 * years)
+                picked: list[tuple[str, float]] = []
+                for d_str, v in hist:
+                    try:
+                        d_val = dt.date.fromisoformat(d_str)
+                    except ValueError:
+                        continue
+                    if d_val >= cutoff:
+                        picked.append((d_str, v))
+                # 窗口内不足 2 点 -> 兜底取尾部 2 点, 保证至少能连成一条短线段
+                if len(picked) < 2:
+                    picked = list(hist[-2:])
+                return picked
+
+            r.pe_history    = _slice_by_years(pe_hist, 5)
+            r.pe_history_3y = _slice_by_years(pe_hist, 3)
+            r.pe_history_1y = _slice_by_years(pe_hist, 1)
             r.pe_history_source = label
             r.pe_forward_source = fwd_pe_source_label
             r.pe_ttm_source = pe_ttm_source_label
@@ -2031,7 +2001,6 @@ _HTML_HEADERS = {
     "EV/EBITDA":  "EV&nbsp;/&nbsp;EBITDA",
     "PE":         "P/E&nbsp;(TTM)",
     "PE Fwd":     "P/E&nbsp;(Fwd)",
-    "PEG":        "PEG",
     "EPS Growth (3-5Y Est)": "EPS&nbsp;Growth&nbsp;(3-5Y&nbsp;Est)",
     "ROE":        "ROE",
 }
@@ -2068,10 +2037,6 @@ def _rank_class(col: str, val: float | None) -> str:
         if val <= 20: return "good"
         if val <= 30: return "mid"
         return "bad"
-    if col == "PEG":
-        if val <= 1: return "good"
-        if val <= 2: return "mid"
-        return "bad"
     return ""
 
 
@@ -2092,7 +2057,7 @@ def _cell_html(col: str, v: str | None, currency: str) -> str:
                     f'<span class="val">{html.escape(num)}</span>{ccy_html}</td>')
         return f'<td class="num">{html.escape(num)}</td>'
 
-    if col in ("EV/EBIT", "EV/EBITDA", "PE", "PE Fwd", "PEG"):
+    if col in ("EV/EBIT", "EV/EBITDA", "PE", "PE Fwd"):
         num_val = _parse_num(v)
         cls = _rank_class(col, num_val)
         disp = f"{num_val:,.2f}" if num_val is not None else html.escape(v)
@@ -2119,11 +2084,11 @@ def _cell_html(col: str, v: str | None, currency: str) -> str:
 
 def render_section_html(title: str, rows: list[Row], currency: str) -> str:
     # ETF section 只展示对 ETF 语义上成立的指标列, 按“成长/质量优先, 估值靠后”顺序:
-    #   - EPS Growth  (发行商: SSGA 3-5Y EPS Growth; Invesco/VUG 无源)
-    #   - ROE         (发行商: Invesco returnOnEquity; SSGA/VUG 无源)
+    #   - EPS Growth  (发行商: SSGA 3-5Y EPS Growth; Invesco 无此口径)
+    #   - ROE         (发行商: Invesco returnOnEquity; SSGA 不发布, SPYM 该列留空)
     #   - PE          (ETF 加权 P/E, 来自 stockanalysis.com/etf/{t}/)
-    #   - PE Fwd      (发行商官方加权前瞻 P/E: SSGA / Invesco / VUG 无源)
-    # 其余列 (MarketCap/EV/Debt/Cash/EBIT/EV·EBIT/EV·EBITDA/PEG) 对 ETF
+    #   - PE Fwd      (发行商官方加权前瞻 P/E: SSGA / Invesco)
+    # 其余列 (MarketCap/EV/Debt/Cash/EBIT/EV·EBIT/EV·EBITDA) 对 ETF
     # 组合层面语义不成立, 直接不渲染, 表格更紧凑.
     if title == "ETFs":
         metric_cols = [FIELDS["epsGrowth3To5Y"], FIELDS["returnOnEquity"],
@@ -2819,7 +2784,7 @@ _HTML_TEMPLATE = """<!doctype html>
     {sections}
 
     <footer>
-      Coloring uses rough rules of thumb (EV/EBIT ≤15 good ≤25 fair; PEG ≤1 good ≤2 fair; P/E ≤20 good ≤30 fair). Not investment advice.
+      Coloring uses rough rules of thumb (EV/EBIT ≤15 good ≤25 fair; P/E ≤20 good ≤30 fair). Not investment advice.
     </footer>
   </div>
 
@@ -2880,10 +2845,10 @@ _HTML_TEMPLATE = """<!doctype html>
     // ETF 走 stockanalysis /etf/{{t}}/ 主页. 与 FWD_SOURCE 采用相同的 tooltip 挂载方式.
     const PE_TTM_SOURCE = {pe_ttm_source_json};
     // ticker -> EPS Growth (3-5Y Est) 单元格数据源标签 (仅 ETF, 个股此列无数据).
-    // SSGA: FactSet 3-5Y 前瞻; Vanguard (VUG): Morningstar TTM 增速回填.
+    // SSGA: FactSet 3-5Y 前瞻.
     const EPS_GROWTH_SOURCE = {eps_growth_source_json};
     // ticker -> ROE 单元格数据源标签 (仅 ETF).
-    // Invesco (QQQM): fundCharacteristics API; Vanguard (VUG/SPYM via VOO proxy): characteristic API.
+    // Invesco (QQQM): fundCharacteristics API; SPYM 该列留空 (SSGA 不发布).
     const ROE_SOURCE = {roe_source_json};
     // ticker -> 公司主页域名，用于 favicon 图标；缺失的 ticker 不显示 logo
     const LOGO_DOMAIN = {logo_map_json};
@@ -4054,7 +4019,7 @@ _HTML_TEMPLATE = """<!doctype html>
       // 命中就在单元格右上角插入一个圆形 ⓘ <a> 按钮, 同时给 td 加 has-src 类
       // 以启用 position: relative。
       // 当前用于四列 ETF: EPS Growth (3-5Y Est) / ROE / P/E (TTM) / P/E (Fwd).
-      // 个股所有数据列 (Close / AsOf / MarketCap ... PEG) 走下面的 annotateStockCols.
+      // 个股所有数据列 (Close / AsOf / MarketCap ... P/E Fwd) 走下面的 annotateStockCols.
       function attachSrcInfo(cell, label, url) {{
         if (!cell || !label) return;
         // 避免同一单元格重复挂载
@@ -4113,11 +4078,6 @@ _HTML_TEMPLATE = """<!doctype html>
           // Invesco QQQM (Nasdaq 100) 官方 ETF 页
           return 'https://www.invesco.com/us/financial-products/etfs/product-detail?audienceType=Investor&ticker=QQQM';
         }}
-        if (s.includes('vanguard')) {{
-          // Vanguard 官方页 (VUG 用 VUG 主页, SPYM/VOO proxy 走 VOO)
-          if (sym === 'VUG') return 'https://investor.vanguard.com/investment-products/etfs/profile/vug';
-          return 'https://investor.vanguard.com/investment-products/etfs/profile/voo';
-        }}
         if (s.includes('multpl')) {{
           return 'https://www.multpl.com/s-p-500-pe-ratio/table/by-month';
         }}
@@ -4135,7 +4095,7 @@ _HTML_TEMPLATE = """<!doctype html>
       // 个股数据统一走 stockanalysis.com, 按列语义走 statistics 页:
       //   MarketCap / EV / Debt / Cash&STI /
       //     EBIT(TTM) / EV/EBIT / EV/EBITDA /
-      //     P/E(TTM) / P/E(Fwd) / PEG      -> statistics 页
+      //     P/E(TTM) / P/E(Fwd)             -> statistics 页
       // 注: Close / As Of 不挂载 ⓘ (报价本身没有额外的 "数据来源" 值得跳转,
       //     且顶部大号价格块与表格里的收盘价语义一致, 挂 ⓘ 反而累赘).
       // HK 与 US 路径不同, 由 ticker 是否纯数字判断 (港股 4 位数字代码 e.g. 0700).
@@ -4153,7 +4113,6 @@ _HTML_TEMPLATE = """<!doctype html>
         ['EV / EBITDA',           'stockanalysis.com · Statistics',             'stats'],
         ['P/E (TTM)',             'stockanalysis.com · Statistics',             'stats'],
         ['P/E (Fwd)',             'stockanalysis.com · Statistics',             'stats'],
-        ['PEG',                   'stockanalysis.com · Statistics',             'stats'],
       ];
       function annotateStockCols() {{
         document.querySelectorAll('table').forEach(tbl => {{
@@ -4351,7 +4310,6 @@ def build_html_report(
             fwd_pe  = _to_float(r.data.get(FIELDS["peForward"]))
             ev_ebit = _to_float(r.data.get(FIELDS["evEbit"]))
             ev_ebitda = _to_float(r.data.get(FIELDS["evEbitda"]))
-            peg     = _to_float(r.data.get(FIELDS["pegRatio"]))
             ebit    = _to_float(r.data.get(FIELDS["ebit"]))
             debt    = _to_float(r.data.get(FIELDS["debt"]))
             cash    = _to_float(r.data.get(FIELDS["totalcash"]))
@@ -4369,7 +4327,6 @@ def build_html_report(
                 "pe_forward": fwd_pe,
                 "ev_ebit": ev_ebit,
                 "ev_ebitda": ev_ebitda,
-                "peg": peg,
                 "ebit_ttm": ebit,
                 "debt": debt,
                 "cash": cash,
