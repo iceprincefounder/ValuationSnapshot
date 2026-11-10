@@ -60,7 +60,7 @@ import re
 import sys
 import time
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # ---------- 股票列表 ----------
@@ -70,7 +70,7 @@ USStocks = [
     "MSFT",
     "GOOGL",   # Alphabet：stockanalysis 已提供公司整体 EV/EBIT，用 GOOGL 或 GOOG 都一样
     "AMZN",
-    "META",
+    "NVDA",
     "BRK.B",   # Berkshire Hathaway Class B (stockanalysis URL 路径为 /stocks/brk.b/)
     "KO",      # Coca-Cola
     "PG",      # Procter & Gamble
@@ -146,7 +146,7 @@ LOGO_DOMAIN: dict[str, str] = {
     "MSFT":  "microsoft.com",
     "GOOGL": "abc.xyz",
     "AMZN":  "amazon.com",
-    "META":  "meta.com",
+    "NVDA":  "nvidia.com",
     "BRK.B": "berkshirehathaway.com",
     "KO":    "coca-colacompany.com",
     "PG":    "pg.com",
@@ -264,25 +264,40 @@ class Row:
 
 
 # ---------- URL 构造 ----------
+#
+# stockanalysis 的所有页面都共享一套"主机 + 市场前缀"骨架, 只是子路径 / query 不同。
+# 旧版本给每种页面都写了一个 _url_* 函数, 加上散落在抓取函数里的若干字面量 URL,
+# 整个脚本里 "if US / elif HK / else raise" 骨架出现了 10+ 遍。统一到一个 helper:
+#
+#   _sa_url(ticker, market, path="statistics", params="p=trailing", api=False)
+#     -> "https://stockanalysis.com/stocks/aapl/statistics/?p=trailing"
+#
+# 原来的 _url_* 函数保留为薄壳 (callsite 稳定), 仅内部实现换成 _sa_url。
+# 几处散落在抓取函数内的字面量 (FCF trailing / FCF annual / FX 反算三页) 也改走 _sa_url。
+def _sa_url(ticker: str, market: str, path: str = "",
+            params: str = "", *, api: bool = False) -> str:
+    tl = ticker.lower()
+    if api:
+        if   market == "US": base = f"https://api.stockanalysis.com/api/symbol/s/{tl}"
+        elif market == "HK": base = f"https://api.stockanalysis.com/api/symbol/q/hkg-{ticker}"
+        else: raise ValueError(f"unknown market: {market}")
+    else:
+        if   market == "US":  base = f"https://stockanalysis.com/stocks/{tl}"
+        elif market == "HK":  base = f"https://stockanalysis.com/quote/hkg/{ticker}"
+        elif market == "ETF": base = f"https://stockanalysis.com/etf/{tl}"
+        else: raise ValueError(f"unknown market: {market}")
+    url = f"{base}/{path}/" if path else f"{base}/"
+    return f"{url}?{params}" if params else url
+
 
 def _url_home(ticker: str, market: str) -> str:
     """主页 URL（用于抓当前/最新收盘价）。"""
-    if market == "US":
-        return f"https://stockanalysis.com/stocks/{ticker.lower()}/"
-    if market == "HK":
-        return f"https://stockanalysis.com/quote/hkg/{ticker}/"
-    if market == "ETF":
-        return f"https://stockanalysis.com/etf/{ticker.lower()}/"
-    raise ValueError(f"unknown market: {market}")
+    return _sa_url(ticker, market)
 
 
 def _url_stats(ticker: str, market: str) -> str:
     """statistics 页 URL（用于抓财务指标）。"""
-    if market == "US":
-        return f"https://stockanalysis.com/stocks/{ticker.lower()}/statistics/"
-    if market == "HK":
-        return f"https://stockanalysis.com/quote/hkg/{ticker}/statistics/"
-    raise ValueError(f"unknown market: {market}")
+    return _sa_url(ticker, market, "statistics")
 
 
 def _url_ratios(ticker: str, market: str, period: str = "trailing") -> str:
@@ -291,23 +306,15 @@ def _url_ratios(ticker: str, market: str, period: str = "trailing") -> str:
     period:
       - "trailing"  → 近 20 个季度 TTM（约 5 年，每季一点）
     """
-    if market == "US":
-        return f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/ratios/?p={period}"
-    if market == "HK":
-        return f"https://stockanalysis.com/quote/hkg/{ticker}/financials/ratios/?p={period}"
-    raise ValueError(f"unknown market: {market}")
+    return _sa_url(ticker, market, "financials/ratios", f"p={period}")
 
 
 def _url_income_quarterly(ticker: str, market: str) -> str:
     """季度损益表页 URL，含 `datekey`+`epsdil`+`opinc` 20 期季度数组。
 
-    用于按“报告日”对齐每周股价，得到严谨的 TTM 序列（4 季滚动求和）。
+    用于按"报告日"对齐每周股价，得到严谨的 TTM 序列（4 季滚动求和）。
     """
-    if market == "US":
-        return f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/?p=quarterly"
-    if market == "HK":
-        return f"https://stockanalysis.com/quote/hkg/{ticker}/financials/?p=quarterly"
-    raise ValueError(f"unknown market: {market}")
+    return _sa_url(ticker, market, "financials", "p=quarterly")
 
 
 def _url_history_weekly(ticker: str, market: str) -> str:
@@ -316,17 +323,8 @@ def _url_history_weekly(ticker: str, market: str) -> str:
     - US : /api/symbol/s/{ticker}/history
     - HK : /api/symbol/q/hkg-{code}/history
     """
-    if market == "US":
-        return (
-            f"https://api.stockanalysis.com/api/symbol/s/{ticker.lower()}/history"
-            f"?type=stock&range=1Y&period=Weekly"
-        )
-    if market == "HK":
-        return (
-            f"https://api.stockanalysis.com/api/symbol/q/hkg-{ticker}/history"
-            f"?type=stock&range=1Y&period=Weekly"
-        )
-    raise ValueError(f"unknown market: {market}")
+    return _sa_url(ticker, market, "history",
+                   "type=stock&range=1Y&period=Weekly", api=True)
 
 
 # ---------- HTTP ----------
@@ -705,28 +703,6 @@ _PAT_SSGA_FY1 = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-
-def fetch_ssga_forward_pe(url: str) -> float | None:
-    """抓 SSGA ETF 页面, 提取 Price/Earnings Ratio FY1 (weighted harmonic FY1)。
-
-    SSGA 每月月末更新, 数据源 FactSet Estimates。抓取失败或数值不合理时返回 None。
-    """
-    html_str = _get(url)
-    if not html_str:
-        return None
-    m = _PAT_SSGA_FY1.search(html_str)
-    if not m:
-        return None
-    try:
-        v = float(m.group(1).replace(",", ""))
-    except ValueError:
-        return None
-    # sanity: FY1 P/E 通常在 5 ~ 200 之间, 超出视为解析异常
-    if v <= 0 or v > 500:
-        return None
-    return v
-
-
 # SSGA HTML 里"Est. 3-5 Year EPS Growth"表格行, 与 FY1 P/E 完全同款结构:
 #   <th ... > Est. 3-5 Year EPS Growth <...> </th> <td class="data">18.43%</td>
 # 数值带 "%" 后缀, 抓取后剥掉再转 float.
@@ -737,28 +713,47 @@ _PAT_SSGA_EPS_GROWTH = re.compile(
 )
 
 
-def fetch_ssga_eps_growth(url: str) -> float | None:
-    """抓 SSGA ETF 页面, 提取 Est. 3-5 Year EPS Growth (加权平均, FactSet Estimates)。
+def _parse_ssga_metric(url: str, pattern: re.Pattern[str],
+                       sane_range: tuple[float, float]) -> float | None:
+    """SSGA ETF 页面指标抓取公用脚手架。
 
-    返回百分比数值 (例如 18.43 代表 18.43%)。抓取失败或数值不合理返回 None。
-    与 fetch_ssga_forward_pe 分开两次请求: 虽然可以复用同一份 HTML,
-    但 SSGA 站点 CDN 命中率高, 一次快照多 1 次请求 (~200ms) 影响可忽略,
-    保持函数职责单一便于失败排查。
+    两个 metric (FY1 P/E、3-5Y EPS Growth) 走的是同款表格行结构, 只是正则匹配的 label
+    和 sanity 区间不同。抽到这里避免同一段 _get + pat.search + float + 区间校验的样板
+    代码重复两次。sane_range 为 (lo, hi) 闭区间, 越界视为解析异常返回 None。
     """
     html_str = _get(url)
     if not html_str:
         return None
-    m = _PAT_SSGA_EPS_GROWTH.search(html_str)
+    m = pattern.search(html_str)
     if not m:
         return None
     try:
         v = float(m.group(1).replace(",", ""))
     except ValueError:
         return None
-    # sanity: 3-5Y EPS growth 通常 -20% ~ +50%, 超出视为解析异常
-    if v < -50 or v > 100:
+    lo, hi = sane_range
+    if not (lo <= v <= hi):
         return None
     return v
+
+
+def fetch_ssga_forward_pe(url: str) -> float | None:
+    """抓 SSGA ETF 页面, 提取 Price/Earnings Ratio FY1 (weighted harmonic FY1)。
+
+    SSGA 每月月末更新, 数据源 FactSet Estimates。抓取失败或数值不合理时返回 None。
+    sanity 区间: FY1 P/E 通常在 5 ~ 200 之间, 这里给到 (0, 500] 的宽松上限。
+    """
+    # 用 nextafter 之类不划算; 直接用一个极小正数做下界即可 (0 不合法, 需 >0)
+    return _parse_ssga_metric(url, _PAT_SSGA_FY1, (1e-9, 500))
+
+
+def fetch_ssga_eps_growth(url: str) -> float | None:
+    """抓 SSGA ETF 页面, 提取 Est. 3-5 Year EPS Growth (加权平均, FactSet Estimates)。
+
+    返回百分比数值 (例如 18.43 代表 18.43%)。抓取失败或数值不合理返回 None。
+    sanity 区间: 3-5Y EPS growth 通常 -20% ~ +50%, 这里给到 [-50, 100]。
+    """
+    return _parse_ssga_metric(url, _PAT_SSGA_EPS_GROWTH, (-50, 100))
 
 
 def fetch_invesco_fund_characteristics(cusip: str) -> dict[str, float] | None:
@@ -826,6 +821,35 @@ def fetch_invesco_forward_pe(cusip: str) -> float | None:
 # 注意：某些季度分母极小时站点会返回 null（如 AMZN 疫情期 pe），
 # 因此数组内除数字外还可能出现字面量 null。
 _PAT_DATEKEY = re.compile(r'datekey:\[([^\]]+)\]')
+
+
+def _parse_sa_js_str_arr(html: str, key: str) -> list[str]:
+    """从 stockanalysis 页面抓 `<key>:["x","y",...]` 这种带引号的字符串数组。
+
+    用于 datekey / fiscalYear / fiscalQuarter 这类日期/标签序列。找不到或空数组
+    均返回 []，调用方按长度判断即可。
+    """
+    m = re.search(rf'\b{re.escape(key)}\s*:\s*\[([^\]]+)\]', html)
+    if not m:
+        return []
+    return re.findall(r'"([^"]+)"', m.group(1))
+
+
+def _first_non_null_num(parts: list[str]) -> float | None:
+    """从 "数值字符串列表" 里取第一个能解析为 float 的值, 跳过 '' / 'null' / 坏值。
+
+    stockanalysis 的 JS 数组 (fcf / opinc / netinccmn ...) 常把未披露季填 null,
+    这个辅助函数把 "新→旧 顺序取最新一个有效值" 这个高频小动作集中处理。
+    """
+    for p in parts:
+        p = p.strip()
+        if not p or p == "null":
+            continue
+        try:
+            return float(p)
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_ttm_series(html: str, field: str) -> list[tuple[str, float]]:
@@ -901,6 +925,221 @@ def parse_quarterly_income(html: str) -> tuple[list[str], list[float | None], li
     return dates, eps, op
 
 
+# ---------- Archive (ValuationSnapshot.xml) 用的"完整季度原子数据"抓取 ----------
+#
+# 主表格展示只需要 TTM 口径, 走 statistics 页一个数字就够。但 archive XML 要存
+# "每一期的原子数据", 所以额外抓两份页面:
+#   1. financials/?p=quarterly       -> revenue / opinc / ebitda / netinccmn / epsdil 数组
+#   2. financials/balance-sheet/     -> shares_out_diluted / debt / cash 数组
+# 两份数据按 datekey (期末日期) 对齐组装成 period 列表, 再写入 archive。
+# 字段缺失时 (SA 字段名漂移 / HK 公司信息披露不全) 该字段位置为 None, archive 侧写 "N/A"。
+
+# SA balance-sheet 页的字段名有若干常见变体, 为了鲁棒先尝试一组候选, 哪个有数据用哪个。
+# 20 年里 SA 若再改字段名, 加候选即可, 无需改调用点。
+_BS_SHARES_CANDIDATES = ["sharesoutdiluted", "shsoutdiluted", "shsdil",
+                         "sharesoutstanding", "shsout", "sharesout"]
+_BS_DEBT_TOTAL        = ["totaldebt", "debt"]
+_BS_DEBT_PARTS        = [("longtermdebt", "shorttermdebt"), ("ltdebt", "stdebt")]
+_BS_CASH_TOTAL        = ["cashstinv", "totalcash", "cashandequiv", "cashequiv", "cash"]
+_BS_CASH_PARTS        = [("cashequiv", "shortterminv"), ("cash", "stinv")]
+
+
+def _first_array_match(html: str, candidates: list[str]) -> list[float | None]:
+    """按顺序尝试多个候选 JS 字段名, 返回第一个匹配到的数组。都没有返回 []."""
+    for name in candidates:
+        arr = _parse_quarterly_array(html, name)
+        if arr:
+            return arr
+    return []
+
+
+def _combine_parts(a: list[float | None], b: list[float | None]) -> list[float | None]:
+    """逐元素相加, 任一为 None 则该位置为 None. 用于 longtermdebt + shorttermdebt 拆分合成。"""
+    n = min(len(a), len(b))
+    out: list[float | None] = []
+    for i in range(n):
+        if a[i] is None or b[i] is None:
+            out.append(None)
+        else:
+            out.append(a[i] + b[i])
+    return out
+
+
+def _fetch_quarterly_income_pack(ticker: str, market: str) -> dict | None:
+    """抓季度损益表, 返回按 asof 对齐的字段 dict (或 None 表示抓取失败)。
+
+    返回结构:
+      {
+        "dates":            [YYYY-MM-DD, ...]  (新->旧),
+        "revenue":          [float|None, ...],
+        "gross_profit":     [float|None, ...],
+        "operating_income": [float|None, ...],
+        "ebit":             [float|None, ...],
+        "ebitda":           [float|None, ...],
+        "net_income":       [float|None, ...],
+        "eps_diluted":      [float|None, ...],
+      }
+    所有列表长度 == len(dates)。某字段 SA 未提供时整列为 None。
+
+    注意: SA 的季度 income statement 页通常只提供 `opinc` 一个字段作为经营性利润,
+    并没有独立的 `ebit` JS 数组 (SA 在 TTM statistics 页上用 opinc 等同于 EBIT)。
+    这里仍然为 `ebit` 列预留抓取尝试, 一旦抓不到就留空由 archive 侧写 "N/A",
+    用户可日后手动从 10-Q/10-K 补齐 "operating_income + non_operating_income"。
+    `gross_profit` 对应 SA 的 `grossprofit` 字段, 几乎所有公司页都有。
+    """
+    html = _get(_url_income_quarterly(ticker, market))
+    if not html:
+        print(f"  .. ARCHIVE income {ticker}: page not accessible", file=sys.stderr)
+        return None
+    dk = _PAT_DATEKEY.search(html)
+    if not dk:
+        return None
+    dates = [s.strip().strip('"') for s in dk.group(1).split(",")]
+    # 过滤掉 "TTM" 这种非日期标签, 只保留真实财季末日期
+    valid_idx: list[int] = []
+    for i, d in enumerate(dates):
+        try:
+            dt.date.fromisoformat(d)
+            valid_idx.append(i)
+        except ValueError:
+            pass
+    def _pick(arr: list[float | None]) -> list[float | None]:
+        return [arr[i] if i < len(arr) else None for i in valid_idx]
+    revenue    = _pick(_parse_quarterly_array(html, "revenue"))
+    grossprof  = _pick(_first_array_match(html, ["grossprofit", "gp"]))
+    opinc      = _pick(_parse_quarterly_array(html, "opinc"))
+    ebit       = _pick(_first_array_match(html, ["ebit"]))
+    ebitda     = _pick(_first_array_match(html, ["ebitda"]))
+    netinc     = _pick(_first_array_match(html, ["netinccmn", "netincome"]))
+    eps_dil    = _pick(_parse_quarterly_array(html, "epsdil"))
+    dates_kept = [dates[i] for i in valid_idx]
+    return {
+        "dates":            dates_kept,
+        "revenue":          revenue,
+        "gross_profit":     grossprof,
+        "operating_income": opinc,
+        "ebit":             ebit,
+        "ebitda":           ebitda,
+        "net_income":       netinc,
+        "eps_diluted":      eps_dil,
+    }
+
+
+def _fetch_quarterly_cashflow_pack(ticker: str, market: str) -> dict | None:
+    """抓季度现金流量表, 返回按 asof 对齐的字段 dict (或 None 表示抓取失败)。
+
+    返回结构:
+      {
+        "dates":                     [YYYY-MM-DD, ...]  (新->旧),
+        "operating_cash_flow":       [float|None, ...],  # 正常为正
+        "capital_expenditure":       [float|None, ...],  # SA 原样 (通常负数)
+        "free_cash_flow":            [float|None, ...],  # SA 直接提供
+        "dividends_paid":            [float|None, ...],  # SA 原样 (通常负数)
+        "share_repurchases":         [float|None, ...],  # SA 原样 (通常负数)
+        "stock_based_compensation":  [float|None, ...],  # 非现金费用, 正常为正
+      }
+
+    SA 的 cash-flow-statement 页字段名随版本有若干变体, 为鲁棒起见每项都用候选列表
+    fallback, 全部抓不到的字段整列为 None, archive 侧写 "N/A"。
+    """
+    url = _sa_url(ticker, market, "financials/cash-flow-statement", "p=quarterly")
+    html = _get(url)
+    if not html:
+        print(f"  .. ARCHIVE cashflow {ticker}: page not accessible", file=sys.stderr)
+        return None
+    dk = _PAT_DATEKEY.search(html)
+    if not dk:
+        return None
+    dates = [s.strip().strip('"') for s in dk.group(1).split(",")]
+    valid_idx: list[int] = []
+    for i, d in enumerate(dates):
+        try:
+            dt.date.fromisoformat(d)
+            valid_idx.append(i)
+        except ValueError:
+            pass
+    def _pick(arr: list[float | None]) -> list[float | None]:
+        return [arr[i] if i < len(arr) else None for i in valid_idx]
+    ocf   = _pick(_first_array_match(html, ["ncfo", "operatingcashflow", "cfo"]))
+    capex = _pick(_first_array_match(html, ["capex", "capitalexpenditure"]))
+    fcf   = _pick(_first_array_match(html, ["fcf", "freecashflow"]))
+    div   = _pick(_first_array_match(html, ["dividend", "commdividends",
+                                             "dividendspaid", "divpaid"]))
+    buyb  = _pick(_first_array_match(html, ["buyback", "repurchases",
+                                             "sharerepurchases"]))
+    sbc   = _pick(_first_array_match(html, ["sbc", "stockcomp",
+                                             "stockbasedcomp"]))
+    dates_kept = [dates[i] for i in valid_idx]
+    return {
+        "dates":                    dates_kept,
+        "operating_cash_flow":      ocf,
+        "capital_expenditure":      capex,
+        "free_cash_flow":           fcf,
+        "dividends_paid":           div,
+        "share_repurchases":        buyb,
+        "stock_based_compensation": sbc,
+    }
+
+
+def _fetch_quarterly_balance_pack(ticker: str, market: str) -> dict | None:
+    """抓季度资产负债表, 返回按 asof 对齐的字段 dict。
+
+    SA 的 balance-sheet 页字段名有变体, 这里按候选列表 fallback:
+      - debt : 优先 totaldebt; 否则 longtermdebt + shorttermdebt
+      - cash : 优先 cashstinv/totalcash; 否则 cashequiv + shortterminv
+    """
+    url = _sa_url(ticker, market, "financials/balance-sheet", "p=quarterly")
+    html = _get(url)
+    if not html:
+        print(f"  .. ARCHIVE balance {ticker}: page not accessible", file=sys.stderr)
+        return None
+    dk = _PAT_DATEKEY.search(html)
+    if not dk:
+        return None
+    dates = [s.strip().strip('"') for s in dk.group(1).split(",")]
+    valid_idx: list[int] = []
+    for i, d in enumerate(dates):
+        try:
+            dt.date.fromisoformat(d)
+            valid_idx.append(i)
+        except ValueError:
+            pass
+    def _pick(arr: list[float | None]) -> list[float | None]:
+        return [arr[i] if i < len(arr) else None for i in valid_idx]
+
+    shares = _pick(_first_array_match(html, _BS_SHARES_CANDIDATES))
+
+    debt_total = _first_array_match(html, _BS_DEBT_TOTAL)
+    if debt_total:
+        debt = _pick(debt_total)
+    else:
+        debt = []
+        for lt_name, st_name in _BS_DEBT_PARTS:
+            lt = _parse_quarterly_array(html, lt_name)
+            st = _parse_quarterly_array(html, st_name)
+            if lt and st:
+                debt = _pick(_combine_parts(lt, st)); break
+
+    cash_total = _first_array_match(html, _BS_CASH_TOTAL)
+    if cash_total:
+        cash = _pick(cash_total)
+    else:
+        cash = []
+        for c_name, si_name in _BS_CASH_PARTS:
+            c = _parse_quarterly_array(html, c_name)
+            si = _parse_quarterly_array(html, si_name)
+            if c and si:
+                cash = _pick(_combine_parts(c, si)); break
+
+    dates_kept = [dates[i] for i in valid_idx]
+    return {
+        "dates":              dates_kept,
+        "shares_out_diluted": shares,
+        "debt":               debt,
+        "cash":               cash,
+    }
+
+
 def _rolling_ttm(values_new_to_old: list[float | None], idx: int) -> float | None:
     """取 values_new_to_old 从 idx 开始向后（时间上向早）4 个季度的和作为 TTM 值。
 
@@ -957,17 +1196,8 @@ def _fetch_weekly_prices(ticker: str, market: str) -> list[tuple[str, float]]:
 
 def _url_history_daily_recent(ticker: str, market: str) -> str:
     """近 5 个交易日日线 K 线 API，用于盘中回退取昨日收盘。"""
-    if market == "US":
-        return (
-            f"https://api.stockanalysis.com/api/symbol/s/{ticker.lower()}/history"
-            f"?type=stock&range=5D&period=Daily"
-        )
-    if market == "HK":
-        return (
-            f"https://api.stockanalysis.com/api/symbol/q/hkg-{ticker}/history"
-            f"?type=stock&range=5D&period=Daily"
-        )
-    raise ValueError(f"unknown market: {market}")
+    return _sa_url(ticker, market, "history",
+                   "type=stock&range=5D&period=Daily", api=True)
 
 
 def _fetch_last_daily_close(ticker: str, market: str) -> tuple[str, float] | None:
@@ -996,6 +1226,32 @@ def _fetch_last_daily_close(ticker: str, market: str) -> tuple[str, float] | Non
     return None
 
 
+def _apply_intraday_fallback(row: dict, ticker: str, market: str) -> None:
+    """盘中回退: 若 row 的 AsOf 比"最近已收盘日线"更新 (说明是盘中快照), 把 close+AsOf
+    替换为前一个已收盘日的 (close, date)。
+
+    行为与原来 _fetch_etf / fetch_ticker 里逐字重复的两段完全一致 (日志、字段写回),
+    抽到这里以消除重复。ETF 场景传 market="US" 即可 (日线 API 对 ETF 兼容 type=stock)。
+    """
+    asof_iso = _asof_to_iso(row.get(CLOSE_DATE_COL))
+    last = _fetch_last_daily_close(ticker, market)
+    if last is None:
+        return
+    prev_date, prev_close = last
+    # 只有当 web 页面日期显著地"新于"日线最后一条时才判定为盘中
+    if not (asof_iso and asof_iso > prev_date):
+        return
+    prev_asof = _iso_to_asof(prev_date) or prev_date
+    print(
+        f"  .. {ticker}: intraday snapshot detected "
+        f"(\"{row[CLOSE_DATE_COL]}\") -> falling back to previous close "
+        f"{prev_close:g} @ {prev_asof}",
+        file=sys.stderr,
+    )
+    row[CLOSE_COL] = f"{prev_close:g}"
+    row[CLOSE_DATE_COL] = prev_asof
+
+
 # 从 parse_home 返回的 asof 字符串中提取"日期部分"，例如：
 #   "Aug 7, 2026, 11:55 AM HKT" -> "Aug 7, 2026"
 #   "Aug 6, 2026"                -> "Aug 6, 2026"
@@ -1005,6 +1261,8 @@ _PAT_ASOF_DATE = re.compile(
 _MONTHS = {m: i for i, m in enumerate(
     ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], start=1
 )}
+# 反向映射: 1 → "Jan". 由 _MONTHS 单一事实源派生, 避免写两份字面量易漂移。
+_MONTH_NAMES = sorted(_MONTHS, key=_MONTHS.get)
 
 
 def _asof_to_iso(asof: str | None) -> str | None:
@@ -1027,12 +1285,6 @@ def _asof_to_iso(asof: str | None) -> str | None:
     if not mo:
         return None
     return f"{year:04d}-{mo:02d}-{day:02d}"
-
-
-_MONTH_NAMES = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-]
 
 
 def _iso_to_asof(iso_date: str | None) -> str | None:
@@ -1137,11 +1389,7 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
     """
     if market == "ETF":
         return None
-    if market == "HK":
-        # 港股路径: /quote/hkg/{code}/financials/cash-flow-statement/?p=trailing
-        url = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/cash-flow-statement/?p=trailing"
-    else:
-        url = f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/cash-flow-statement/?p=trailing"
+    url = _sa_url(ticker, market, "financials/cash-flow-statement", "p=trailing")
 
     html = _get(url)
     if not html:
@@ -1170,10 +1418,7 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
         return None
 
     # 同步抓 datekey (与 fcf 数组一一对应, 用于识别披露频率)
-    md = re.search(r'\bdatekey\s*:\s*\[([^\]]+)\]', html)
-    dates_all: list[str] = []
-    if md:
-        dates_all = re.findall(r'"([^"]+)"', md.group(1))
+    dates_all = _parse_sa_js_str_arr(html, "datekey")
 
     # 逐元素解析: null / 空 / 坏值都跳过, 但保留对应的 datekey (用来判定频率)
     fcf_series: list[float] = []
@@ -1200,14 +1445,13 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
     # 注: frequency 仅作 "整体披露密度" 的粗略提示; 前端计算 N 年 CAGR 时不依赖它,
     # 而是按 fcf_dates 中"最接近 N 年前"的那一期做匹配, 从而能正确处理 9992 这种
     # "早期季度报, 近期改半年报" 的混合披露公司。
-    from datetime import datetime as _dt
     frequency = "quarterly"  # 默认
     if len(dates_kept) >= 2:
         gaps_days: list[int] = []
         for i in range(len(dates_kept) - 1):
             try:
-                d0 = _dt.strptime(dates_kept[i],     "%Y-%m-%d")
-                d1 = _dt.strptime(dates_kept[i + 1], "%Y-%m-%d")
+                d0 = dt.date.fromisoformat(dates_kept[i])
+                d1 = dt.date.fromisoformat(dates_kept[i + 1])
                 gaps_days.append(abs((d0 - d1).days))
             except (ValueError, TypeError):
                 pass
@@ -1222,11 +1466,11 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
     # 用 fcf_dates 的首尾日期跨度判断, 保留跨度 <= ~5.5 年的部分
     if dates_kept:
         try:
-            d_head = _dt.strptime(dates_kept[0], "%Y-%m-%d")
+            d_head = dt.date.fromisoformat(dates_kept[0])
             keep_n = len(fcf_series)
             for i in range(1, len(dates_kept)):
                 try:
-                    di = _dt.strptime(dates_kept[i], "%Y-%m-%d")
+                    di = dt.date.fromisoformat(dates_kept[i])
                     if (d_head - di).days > 365 * 5 + 180:  # ~5.5 年
                         keep_n = i
                         break
@@ -1242,18 +1486,12 @@ def _fetch_sa_fcf(ticker: str, market: str) -> dict | None:
     fcf_ttm = fcf_series[0]
 
     # 顺带抓 fiscalYear[0] 作为 "asof" 标签 (格式 "2026 Q3" 或年度 "2024")
-    asof = None
-    m2 = re.search(r'\bfiscalYear\s*:\s*\[([^\]]+)\]', html)
-    if m2:
-        vals = re.findall(r'"([^"]+)"', m2.group(1))
-        if vals:
-            asof = vals[0]
+    fy_vals = _parse_sa_js_str_arr(html, "fiscalYear")
+    asof = fy_vals[0] if fy_vals else None
     # 页面可能还有 fiscalQuarter: 用它补齐 "2026 Q3" 之类
-    mq = re.search(r'\bfiscalQuarter\s*:\s*\[([^\]]+)\]', html)
-    if mq and asof:
-        qs = re.findall(r'"([^"]+)"', mq.group(1))
-        if qs:
-            asof = f"{asof} {qs[0]}"
+    fq_vals = _parse_sa_js_str_arr(html, "fiscalQuarter")
+    if asof and fq_vals:
+        asof = f"{asof} {fq_vals[0]}"
 
     # 报表原币 (functional/reporting currency): 页面里一定有一行
     #   "Financials in millions CNY. Fiscal year is ..."
@@ -1304,10 +1542,7 @@ def _fetch_sa_fcf_annual(ticker: str, market: str) -> dict | None:
     """
     if market == "ETF":
         return None
-    if market == "HK":
-        url = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/cash-flow-statement/"
-    else:
-        url = f"https://stockanalysis.com/stocks/{ticker.lower()}/financials/cash-flow-statement/"
+    url = _sa_url(ticker, market, "financials/cash-flow-statement")
 
     html = _get(url)
     if not html:
@@ -1319,8 +1554,7 @@ def _fetch_sa_fcf_annual(ticker: str, market: str) -> dict | None:
     if not m:
         print(f"  !! SA FCF annual {ticker}: 'fcf' array not found", file=sys.stderr)
         return None
-    md = re.search(r'\bdatekey\s*:\s*\[([^\]]+)\]', html)
-    dates_all: list[str] = re.findall(r'"([^"]+)"', md.group(1)) if md else []
+    dates_all = _parse_sa_js_str_arr(html, "datekey")
 
     # 关键: 年报页的 datekey 数组第 0 位通常是字面量 "TTM" (代表最新 TTM 值), 后续才是
     # "2025-12-31" / "2024-12-31" 这种财年末日期. 我们只保留"能解析为日期"的年度点,
@@ -1355,11 +1589,9 @@ def _fetch_sa_fcf_annual(ticker: str, market: str) -> dict | None:
     dates_kept = dates_kept[:10]
 
     asof = None
-    m2 = re.search(r'\bfiscalYear\s*:\s*\[([^\]]+)\]', html)
-    if m2:
-        vals = re.findall(r'"([^"]+)"', m2.group(1))
-        if vals:
-            asof = vals[0]
+    fy_vals = _parse_sa_js_str_arr(html, "fiscalYear")
+    if fy_vals:
+        asof = fy_vals[0]
 
     report_currency: str | None = None
     mc = re.search(r'Financials\s+in\s+\w+\s+([A-Z]{3})', html)
@@ -1421,7 +1653,7 @@ def _fetch_fx_implied(ticker: str, market: str, report_ccy: str, quote_ccy: str)
         return None
 
     # 抓 stats 页 (HKD 侧)
-    url_st = f"https://stockanalysis.com/quote/hkg/{ticker}/statistics/"
+    url_st = _sa_url(ticker, "HK", "statistics")
     html_st = _get(url_st)
     if not html_st:
         return None
@@ -1448,7 +1680,7 @@ def _fetch_fx_implied(ticker: str, market: str, report_ccy: str, quote_ccy: str)
     #   stats "EBIT"        <-> IS "opinc"     (Operating Income = EBIT)
     #   stats "Net Income"  <-> IS "netinccmn" (Net Income to Common)
     #   stats "EBITDA"      <-> IS 页无原始序列 (stats 页是 opinc + D&A 合成), 跳过
-    url_is = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/?p=trailing"
+    url_is = _sa_url(ticker, "HK", "financials", "p=trailing")
     html_is = _get(url_is)
     is_first: dict[str, float] = {}
     is_asof: str | None = None
@@ -1456,32 +1688,21 @@ def _fetch_fx_implied(ticker: str, market: str, report_ccy: str, quote_ccy: str)
         for key in ("opinc", "netinccmn"):
             m = re.search(rf'\b{key}\s*:\s*\[([^\]]+)\]', html_is)
             if m:
-                for p in m.group(1).split(","):
-                    p = p.strip()
-                    if not p or p == "null":
-                        continue
-                    try:
-                        is_first[key] = float(p); break
-                    except ValueError:
-                        continue
-        md = re.search(r'\bdatekey\s*:\s*\[([^\]]+)\]', html_is)
-        if md:
-            dks = re.findall(r'"([^"]+)"', md.group(1))
-            if dks:
-                is_asof = dks[0]
+                v = _first_non_null_num(m.group(1).split(","))
+                if v is not None:
+                    is_first[key] = v
+        dks = _parse_sa_js_str_arr(html_is, "datekey")
+        if dks:
+            is_asof = dks[0]
 
     # 抓 cash-flow 页 (报表原币, fcf 首值)
-    url_cf = f"https://stockanalysis.com/quote/hkg/{ticker}/financials/cash-flow-statement/?p=trailing"
+    url_cf = _sa_url(ticker, "HK", "financials/cash-flow-statement", "p=trailing")
     html_cf = _get(url_cf)
     cf_fcf: float | None = None
     if html_cf:
         m = re.search(r'\bfcf\s*:\s*\[([^\]]+)\]', html_cf)
         if m:
-            for p in m.group(1).split(","):
-                p = p.strip()
-                if p and p != "null":
-                    try: cf_fcf = float(p); break
-                    except ValueError: pass
+            cf_fcf = _first_non_null_num(m.group(1).split(","))
 
     # 组装锚点对
     anchors: list[tuple[str, float, float, float]] = []
@@ -1638,20 +1859,7 @@ def _fetch_etf(ticker: str) -> Row:
     row[CLOSE_COL], row[CLOSE_DATE_COL] = parse_home(home_html)
 
     # 盘中回退到前一交易日收盘 (日线 API 对 ETF 同样兼容 type=stock)
-    asof_iso = _asof_to_iso(row.get(CLOSE_DATE_COL))
-    last = _fetch_last_daily_close(ticker, "US")
-    if last is not None:
-        prev_date, prev_close = last
-        if asof_iso and asof_iso > prev_date:
-            prev_asof = _iso_to_asof(prev_date) or prev_date
-            print(
-                f"  .. {ticker}: intraday snapshot detected "
-                f"(\"{row[CLOSE_DATE_COL]}\") -> falling back to previous close "
-                f"{prev_close:g} @ {prev_asof}",
-                file=sys.stderr,
-            )
-            row[CLOSE_COL] = f"{prev_close:g}"
-            row[CLOSE_DATE_COL] = prev_asof
+    _apply_intraday_fallback(row, ticker, "US")
 
     etf = parse_etf_snapshot(home_html)
 
@@ -1846,21 +2054,7 @@ def fetch_ticker(ticker: str, market: str) -> Row:
     # 若网页上的时间戳日期 > 数据源日线里最近一条已收盘日期，说明当天正在盘中交易，
     # 此时改用"最近一条已收盘日线"（= 前一交易日收盘价）。
     # stockanalysis 的日线 API 只包含已完成交易日，因此其"最新点"天然是最近的收盘。
-    asof_iso = _asof_to_iso(row.get(CLOSE_DATE_COL))
-    last = _fetch_last_daily_close(ticker, market)
-    if last is not None:
-        prev_date, prev_close = last
-        # 只有当 web 页面日期显著地"新于"日线最后一条时才判定为盘中
-        if asof_iso and asof_iso > prev_date:
-            prev_asof = _iso_to_asof(prev_date) or prev_date
-            print(
-                f"  .. {ticker}: intraday snapshot detected "
-                f"(\"{row[CLOSE_DATE_COL]}\") -> falling back to previous close "
-                f"{prev_close:g} @ {prev_asof}",
-                file=sys.stderr,
-            )
-            row[CLOSE_COL] = f"{prev_close:g}"
-            row[CLOSE_DATE_COL] = prev_asof
+    _apply_intraday_fallback(row, ticker, market)
 
     # 港股统一样式：若 AsOf 只有日期（没 HKT/时区标签），补上 "4:00 PM HKT"
     # 目的是让港股所有行的 AsOf 与美股 "..., 4:00 PM EDT" 风格一致。
@@ -1955,34 +2149,9 @@ def _fmt_number(s: str | None) -> str:
     return f"{v:,.2f}"
 
 
-def print_table(title: str, rows: list[Row]) -> None:
-    cols = [CLOSE_COL, CLOSE_DATE_COL] + list(FIELDS.values())
-    headers = ["Ticker"] + cols
-    # 日期字段（AsOf）可能较长（如 "Aug 7, 2026, 11:55 AM HKT"），列宽给足
-    widths = [10, 10, 30] + [12] * len(FIELDS)
-
-    def line(cells):
-        return "  ".join(str(c).rjust(w) for c, w in zip(cells, widths))
-
-    print()
-    print(f"== {title} ==")
-    print(line(headers))
-    print("-" * (sum(widths) + 2 * (len(widths) - 1)))
-    for r in rows:
-        cells = [r.symbol]
-        for c in cols:
-            v = r.data.get(c)
-            if c in ("MarketCap", "EV", "Debt", "Cash&STI", "EBIT(TTM)"):
-                cells.append(_fmt_number(v))
-            else:
-                cells.append("N/A" if v is None else v)
-        print(line(cells))
-
-
 # ---------- HTML 输出 ----------
 
 import html
-import json
 from datetime import datetime
 
 _MONEY_COLS = {"MarketCap", "EV", "Debt", "Cash&STI", "EBIT(TTM)"}
@@ -4245,20 +4414,25 @@ def build_html_report(
                 eps_growth_source[r.symbol] = r.eps_growth_source
             if r.roe_source:
                 roe_source[r.symbol] = r.roe_source
-    pe_5y_json = json.dumps(pe_5y, ensure_ascii=False)
-    ev_5y_json = json.dumps(ev_5y, ensure_ascii=False)
-    pe_3y_json = json.dumps(pe_3y, ensure_ascii=False)
-    ev_3y_json = json.dumps(ev_3y, ensure_ascii=False)
-    pe_1y_json = json.dumps(pe_1y, ensure_ascii=False)
-    ev_1y_json = json.dumps(ev_1y, ensure_ascii=False)
-    pe_source_json = json.dumps(pe_source, ensure_ascii=False)
-    fwd_source_json = json.dumps(fwd_source, ensure_ascii=False)
-    pe_ttm_source_json = json.dumps(pe_ttm_source, ensure_ascii=False)
-    eps_growth_source_json = json.dumps(eps_growth_source, ensure_ascii=False)
-    roe_source_json = json.dumps(roe_source, ensure_ascii=False)
-    logo_map_json = json.dumps(LOGO_DOMAIN, ensure_ascii=False)
-    # ETF 集合注入前端, 用于动态隐藏对 ETF 无意义的 Tab (EV/EBIT / DCF)。
-    etf_set_json = json.dumps([t.upper() for t in ETFs], ensure_ascii=False)
+    # 把所有要序列化为 JSON 字面量注入前端的字段统一走一次 dumps + ** 展开, 替代旧版
+    # 11 行逐个 xx_json = json.dumps(xx) + 再在 .format(**...) 里逐个列字段的样板。
+    _payload = {
+        "pe_5y_json":              pe_5y,
+        "ev_5y_json":              ev_5y,
+        "pe_3y_json":              pe_3y,
+        "ev_3y_json":              ev_3y,
+        "pe_1y_json":              pe_1y,
+        "ev_1y_json":              ev_1y,
+        "pe_source_json":          pe_source,
+        "fwd_source_json":         fwd_source,
+        "pe_ttm_source_json":      pe_ttm_source,
+        "eps_growth_source_json":  eps_growth_source,
+        "roe_source_json":         roe_source,
+        # ETF 集合注入前端, 用于动态隐藏对 ETF 无意义的 Tab (EV/EBIT / DCF)。
+        "etf_set_json":            [t.upper() for t in ETFs],
+        "logo_map_json":           LOGO_DOMAIN,
+    }
+    json_kwargs = {k: json.dumps(v, ensure_ascii=False) for k, v in _payload.items()}
 
     # 每个 ticker 的当前快照，供前端在均值虚线右端反推"若估值回到均值时的隐含股价"
     #   P/E 情形:    implied_price = avg_pe / snap_pe * close   (= avg_pe * EPS_TTM)
@@ -4366,23 +4540,11 @@ def build_html_report(
     return _HTML_TEMPLATE.format(
         sections=body,
         generated_at=ts.strftime("%Y-%m-%d %H:%M:%S"),
-        pe_5y_json=pe_5y_json,
-        ev_5y_json=ev_5y_json,
-        pe_3y_json=pe_3y_json,
-        ev_3y_json=ev_3y_json,
-        pe_1y_json=pe_1y_json,
-        ev_1y_json=ev_1y_json,
-        pe_source_json=pe_source_json,
-        fwd_source_json=fwd_source_json,
-        pe_ttm_source_json=pe_ttm_source_json,
-        eps_growth_source_json=eps_growth_source_json,
-        roe_source_json=roe_source_json,
-        logo_map_json=logo_map_json,
-        etf_set_json=etf_set_json,
         snapshot_json=snapshot_json,
         dcf_json=dcf_json,
         favicon_link=_favicon_link_tag(),
         vs_data_json=vs_data_json,
+        **json_kwargs,
     )
 
 
@@ -4466,6 +4628,477 @@ def _sync_pages(report_path: str) -> None:
     nojekyll = os.path.join(pages_dir, ".nojekyll")
     if not os.path.exists(nojekyll):
         open(nojekyll, "w", encoding="utf-8").close()
+
+
+# ---------- ValuationSnapshot.xml (20 年归档) ----------
+#
+# 设计见项目里相关讨论; 核心约束:
+#   1. append-only: 已存在的 <week>/<period> 一字不改 (用户会手动补 "N/A")。
+#   2. 缺失值: 全局统一字符串 "N/A", 不省略 attribute 也不用 ""/null/0。
+#   3. 幂等 key: ETF -> (symbol, week.asof); 个股 -> (symbol, period.asof)。
+#   4. 格式稳定: 读用 ElementTree, 写用手工字符串拼接, 以保留 FIELD REGISTRY
+#      注释块、attribute 顺序、用户手动改动。
+#   5. 原子写: tmp + os.replace, 避免中断破坏历史文件。
+
+ARCHIVE_XML_FILENAME = "ValuationSnapshot.xml"
+
+# 字段登记表 (FIELD REGISTRY). 更改字段时需要同步调整 _ARCHIVE_HEADER。
+# 新增字段的 "20 年合同": 加 attribute + 下方登记一行 + minor+1.
+_ARCHIVE_SCHEMA = "1"
+_ARCHIVE_MINOR  = "2"
+_ARCHIVE_HEADER = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ValuationSnapshot history archive
+  ================================================================
+  LAYOUT
+    <snapshots schema="N" minor="M">
+      <etf_weekly>           : one row per ETF per week
+        <quote>              : one per ETF
+          <week>             : key = asof (Friday close date), unique, idempotent
+      <fundamentals>         : quarterly atomic data for US/HK stocks
+        <quote>              : one per stock
+          <period>           : key = asof (period end), unique, idempotent
+
+  EXTENSIBILITY RULES
+    1. New ticker        -> add <quote>, schema unchanged
+    2. New attribute     -> add attr + register below + bump minor
+    3. Rename/redefine   -> bump schema (breaking)
+    4. Structured data   -> use child elements, not attributes
+    5. Missing value     -> literal "N/A" (never omit, never "" / null / 0)
+                            Reader: v = e.get(k, "N/A"); x = float(v) if v != "N/A" else None
+                            Users may replace "N/A" with real values by hand;
+                            append-only guarantee ensures edits are preserved.
+
+  SCHEMA EVOLUTION
+    - Fields are append-only; new fields bump minor (e.g. 1.0 -> 1.1)
+    - Historical rows written under an older minor NEVER get back-filled
+      with the new attribute; those cells are naturally absent (treated
+      as "N/A" by readers via `.get(k, "N/A")`).
+
+  APPEND-ONLY GUARANTEE
+    1. Script only appends new (symbol, asof) nodes
+    2. Existing nodes are never touched, including hand edits
+    3. Users may fill in "N/A" at any time; future runs will not overwrite
+
+  FIELD REGISTRY (schema={_ARCHIVE_SCHEMA}, minor={_ARCHIVE_MINOR})
+  ==== <etf_weekly>/<quote> ==== static meta ====
+    symbol              since 1.0  ETF ticker
+    market              since 1.0  constant "ETF"
+    currency            since 1.0  quote ccy (ISO 4217)
+  ==== <week> ==== weekly snapshot ====
+    asof                since 1.0  Friday ISO date, UNIQUE KEY per (symbol)
+    captured_week       since 1.0  script run date (ISO)
+    price               since 1.0  Friday close, quote ccy
+    pe_ttm              since 1.0  peRatio from SA /etf/ page, dimensionless
+    pe_forward          since 1.0  forward PE from SSGA (SPYM) / Invesco (QQQM)
+  ==== <fundamentals>/<quote> ==== static meta ====
+    symbol              since 1.0  ticker; HK = 4-digit
+    market              since 1.0  "US" | "HK"
+    currency            since 1.0  quote ccy
+    report_currency     since 1.0  reporting ccy; HK stocks may be CNY
+  ==== <period> ==== quarterly atomic data ====
+    asof                since 1.0  period-end ISO date, UNIQUE KEY per (symbol)
+    label               since 1.0  "2026 Q3" / "2026 H1" / "FY2016"
+    period_type         since 1.0  "quarterly" | "semiannual" | "annual"
+    captured_week       since 1.0  script run date when first written (ISO)
+    price_at_asof       since 1.0  close of first week captured after release, quote ccy
+    ~~~~ income statement ~~~~
+    revenue             since 1.0  quarterly revenue, report ccy, absolute units
+    gross_profit        since 1.1  quarterly gross profit (SA grossprofit), report ccy
+    operating_income    since 1.0  quarterly operating income (SA opinc), report ccy
+    ebit                since 1.1  quarterly EBIT; SA rarely exposes this as a
+                                   separate field, so it is usually "N/A" and
+                                   can be filled in by hand from 10-Q / 10-K
+    ebitda              since 1.0  quarterly EBITDA, report ccy
+    net_income          since 1.0  quarterly net income (SA netinccmn), report ccy
+    eps_diluted         since 1.0  quarterly diluted EPS, report ccy
+    ~~~~ cash flow statement ~~~~
+    operating_cash_flow      since 1.2  cash from operations (SA ncfo), report ccy;
+                                        normally positive
+    capital_expenditure      since 1.2  CapEx (SA capex), report ccy; SA stores as
+                                        negative number (cash outflow), do NOT flip
+    free_cash_flow           since 1.2  FCF = OCF + CapEx (SA fcf), report ccy;
+                                        normally positive
+    dividends_paid           since 1.2  cash dividends paid, report ccy; SA stores
+                                        as negative (cash outflow)
+    share_repurchases        since 1.2  share buyback cash out, report ccy; SA stores
+                                        as negative
+    stock_based_compensation since 1.2  SBC non-cash expense (SA sbc), report ccy;
+                                        normally positive
+    ~~~~ balance sheet (period-end) ~~~~
+    shares_out_diluted  since 1.0  period-end diluted share count
+    debt                since 1.0  period-end total debt, report ccy
+    cash                since 1.0  period-end cash + STI, report ccy
+-->
+<snapshots schema="{_ARCHIVE_SCHEMA}" minor="{_ARCHIVE_MINOR}" generator="ValuationSnapshot.py">
+  <etf_weekly>
+  </etf_weekly>
+  <fundamentals>
+  </fundamentals>
+</snapshots>
+"""
+
+# ETF <week> 的 attribute 顺序 (写入时的固定顺序, 读取时顺序无关)
+_ETF_WEEK_ATTRS = ("asof", "captured_week", "price", "pe_ttm", "pe_forward")
+# <period> 的 attribute 顺序
+_PERIOD_ATTRS = (
+    "asof", "label", "period_type", "captured_week", "price_at_asof",
+    # Income statement
+    "revenue", "gross_profit", "operating_income", "ebit", "ebitda",
+    "net_income", "eps_diluted",
+    # Cash flow statement
+    "operating_cash_flow", "capital_expenditure", "free_cash_flow",
+    "dividends_paid", "share_repurchases", "stock_based_compensation",
+    # Balance sheet
+    "shares_out_diluted", "debt", "cash",
+)
+
+
+def _fmt_archive_num(v) -> str:
+    """数值 -> archive 字符串. 规则:
+      - None/空串/无效  -> "N/A"
+      - 整数值         -> 不带小数 (股数 / 绝对金额单位常是整数)
+      - 浮点           -> 保留原精度, 最多 6 位有效数字
+    """
+    if v is None or v == "":
+        return "N/A"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "N/A"
+    if f != f:  # NaN
+        return "N/A"
+    # 整数样式: 大金额 / 股数
+    if abs(f) >= 1e6 and float(int(f)) == f:
+        return str(int(f))
+    # 其余按 "最多 6 位有效数字, 去尾部 0"
+    s = f"{f:.6g}"
+    return s
+
+
+def _attr_str(k: str, v: str) -> str:
+    """构造一个 attribute 片段 (已做 XML attr-value 转义)."""
+    esc = (v.replace("&", "&amp;")
+             .replace('"', "&quot;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;"))
+    return f'{k}="{esc}"'
+
+
+def _build_etf_week_entries(rows: list[Row], run_date: str) -> list[dict]:
+    """从 ETF Row 列表构造 archive 用的 week entry (每行一个 dict)。
+
+    captured_week 用脚本运行日; asof 用 Row.data[CLOSE_DATE_COL] 转 ISO (= 周五收盘日)。
+    若 asof 解析失败 (ETF 抓取整体失败) 该 Row 跳过。
+    """
+    out: list[dict] = []
+    for r in rows:
+        asof = _asof_to_iso(r.data.get(CLOSE_DATE_COL))
+        if not asof:
+            continue
+        price = r.data.get(CLOSE_COL)
+        pe_ttm = r.data.get(FIELDS["pe"])
+        pe_fwd = r.data.get(FIELDS["peForward"])
+        out.append({
+            "symbol":        r.symbol,
+            "market":        "ETF",
+            "currency":      "USD",   # 当前所有 ETF 都是 USD; 未来加港股 ETF 时按需扩展
+            "asof":          asof,
+            "captured_week": run_date,
+            "price":         _fmt_archive_num(price),
+            "pe_ttm":        _fmt_archive_num(pe_ttm),
+            "pe_forward":    _fmt_archive_num(pe_fwd),
+        })
+    return out
+
+
+def _build_fundamentals_entries(ticker: str, market: str, currency: str,
+                                 row: Row, run_date: str) -> list[dict]:
+    """为单只个股抓季度原子数据, 组装 archive 用的 period entry 列表 (新->旧)。
+
+    每个 dict 对应 archive 里的一个 <period>。缺失字段值一律写 "N/A"。
+    若 income/balance 两份抓取都失败, 返回 []。
+    """
+    inc = _fetch_quarterly_income_pack(ticker, market)
+    cfs = _fetch_quarterly_cashflow_pack(ticker, market)
+    bal = _fetch_quarterly_balance_pack(ticker, market)
+    if not inc and not cfs and not bal:
+        return []
+    # 以 income 的 dates 为主锚 (有 EPS/营收); cashflow/balance 按日期对齐
+    dates_master: list[str] = (
+        (inc or {}).get("dates", []) or
+        (cfs or {}).get("dates", []) or
+        (bal or {}).get("dates", [])
+    )
+    if not dates_master:
+        return []
+
+    cfs_idx: dict[str, int] = {}
+    if cfs and cfs.get("dates"):
+        for i, d in enumerate(cfs["dates"]):
+            cfs_idx[d] = i
+    bal_idx: dict[str, int] = {}
+    if bal and bal.get("dates"):
+        for i, d in enumerate(bal["dates"]):
+            bal_idx[d] = i
+
+    # 推断 period_type: 看相邻日期间隔中位数 (quarterly ~90d / semiannual ~180d / annual ~360d)
+    period_type = "quarterly"
+    try:
+        gaps: list[int] = []
+        for i in range(len(dates_master) - 1):
+            d0 = dt.date.fromisoformat(dates_master[i])
+            d1 = dt.date.fromisoformat(dates_master[i + 1])
+            gaps.append(abs((d0 - d1).days))
+        if gaps:
+            gaps.sort()
+            med = gaps[len(gaps) // 2]
+            if   med >= 300: period_type = "annual"
+            elif med >= 130: period_type = "semiannual"
+            else:            period_type = "quarterly"
+    except ValueError:
+        pass
+
+    def _label_for(date_str: str) -> str:
+        """生成人类标签: quarterly -> 'YYYY QN'; semiannual -> 'YYYY H1/H2'; annual -> 'FYYYYY'."""
+        try:
+            d = dt.date.fromisoformat(date_str)
+        except ValueError:
+            return date_str
+        if period_type == "annual":
+            return f"FY{d.year}"
+        if period_type == "semiannual":
+            return f"{d.year} H{1 if d.month <= 6 else 2}"
+        # quarterly
+        q = (d.month - 1) // 3 + 1
+        return f"{d.year} Q{q}"
+
+    entries: list[dict] = []
+    for i, date_str in enumerate(dates_master):
+        ci = cfs_idx.get(date_str)
+        bi = bal_idx.get(date_str)
+        def _inc_val(key: str) -> str:
+            if not inc: return "N/A"
+            arr = inc.get(key, []) or []
+            return _fmt_archive_num(arr[i]) if i < len(arr) else "N/A"
+        def _cfs_val(key: str) -> str:
+            if ci is None or not cfs: return "N/A"
+            arr = cfs.get(key, []) or []
+            return _fmt_archive_num(arr[ci]) if ci < len(arr) else "N/A"
+        def _bal_val(key: str) -> str:
+            if bi is None or not bal: return "N/A"
+            arr = bal.get(key, []) or []
+            return _fmt_archive_num(arr[bi]) if bi < len(arr) else "N/A"
+        entries.append({
+            "symbol":             ticker,
+            "market":             market,
+            "currency":           currency,
+            # report_currency 走 DCF 流程才能拿到; 这里退而用 currency, 下游若已知可覆盖
+            "report_currency":    row.dcf.get("report_currency") if row.dcf else currency,
+            "asof":               date_str,
+            "label":              _label_for(date_str),
+            "period_type":        period_type,
+            "captured_week":      run_date,
+            # price_at_asof: 当前运行只知道"今日"的 close; 对最新一期可用, 对历史期用 N/A
+            # (历史期的季报发布当周 close 已错过, 保留给用户手动补)
+            "price_at_asof":      _fmt_archive_num(row.data.get(CLOSE_COL)) if i == 0 else "N/A",
+            # ---- Income statement ----
+            "revenue":                   _inc_val("revenue"),
+            "gross_profit":              _inc_val("gross_profit"),
+            "operating_income":          _inc_val("operating_income"),
+            "ebit":                      _inc_val("ebit"),
+            "ebitda":                    _inc_val("ebitda"),
+            "net_income":                _inc_val("net_income"),
+            "eps_diluted":               _inc_val("eps_diluted"),
+            # ---- Cash flow statement ----
+            "operating_cash_flow":       _cfs_val("operating_cash_flow"),
+            "capital_expenditure":       _cfs_val("capital_expenditure"),
+            "free_cash_flow":            _cfs_val("free_cash_flow"),
+            "dividends_paid":            _cfs_val("dividends_paid"),
+            "share_repurchases":         _cfs_val("share_repurchases"),
+            "stock_based_compensation":  _cfs_val("stock_based_compensation"),
+            # ---- Balance sheet ----
+            "shares_out_diluted":        _bal_val("shares_out_diluted"),
+            "debt":                      _bal_val("debt"),
+            "cash":                      _bal_val("cash"),
+        })
+    return entries
+
+
+def _read_archive_keys(xml_path: str) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """读 archive 已有的 (symbol, asof) key 集合, 分别返回 (etf_week_keys, period_keys).
+
+    文件不存在/空文件/全空白 -> 返回两个空集合, 调用方据此走初始化路径(写入完整骨架)。
+    文件存在但解析失败 -> 返回 sentinel 集合, 调用方据此拒绝写入, 保护用户已有的
+    (可能是手动编辑中的) 文件内容, 避免被脚本意外覆盖。
+    """
+    import os
+    import xml.etree.ElementTree as ET
+    if not os.path.exists(xml_path):
+        return set(), set()
+    # 空文件 (0 字节) 或只有空白 -> 等同于"不存在", 走初始化。这个分支覆盖用户常见操作:
+    #   在仓库里 `touch ValuationSnapshot.xml` 预建一个空壳文件, 期望脚本首次运行时填充。
+    try:
+        with open(xml_path, "rb") as f:
+            raw = f.read()
+        if not raw.strip():
+            return set(), set()
+    except OSError:
+        pass
+    try:
+        tree = ET.parse(xml_path)
+    except ET.ParseError as e:
+        print(f"  !! archive parse failed: {e}; will NOT overwrite", file=sys.stderr)
+        # 返回"全集"的 sentinel: 读失败时宁可什么都不写, 也不要毁掉文件
+        # 这里用一个不可能匹配的 (symbol, asof) 单例, 让 _diff 逻辑清空所有待写
+        return {("__PARSE_ERROR__", "")}, {("__PARSE_ERROR__", "")}
+    root = tree.getroot()
+    etf_keys: set[tuple[str, str]] = set()
+    for q in root.findall('./etf_weekly/quote'):
+        sym = q.get("symbol") or ""
+        for w in q.findall('week'):
+            asof = w.get("asof") or ""
+            if sym and asof:
+                etf_keys.add((sym, asof))
+    period_keys: set[tuple[str, str]] = set()
+    for q in root.findall('./fundamentals/quote'):
+        sym = q.get("symbol") or ""
+        for p in q.findall('period'):
+            asof = p.get("asof") or ""
+            if sym and asof:
+                period_keys.add((sym, asof))
+    return etf_keys, period_keys
+
+
+def _format_week_line(entry: dict) -> str:
+    attrs = " ".join(_attr_str(k, entry[k]) for k in _ETF_WEEK_ATTRS)
+    return f'      <week {attrs}/>'
+
+
+def _format_period_line(entry: dict) -> str:
+    attrs = " ".join(_attr_str(k, entry[k]) for k in _PERIOD_ATTRS)
+    return f'      <period {attrs}/>'
+
+
+def _format_etf_quote_block(sym: str, market: str, currency: str, week_lines: list[str]) -> str:
+    header = (f'    <quote symbol="{sym}" market="{market}" currency="{currency}">')
+    body   = "\n".join(week_lines)
+    return f'{header}\n{body}\n    </quote>'
+
+
+def _format_fund_quote_block(sym: str, market: str, currency: str,
+                              report_currency: str, period_lines: list[str]) -> str:
+    header = (f'    <quote symbol="{sym}" market="{market}" '
+              f'currency="{currency}" report_currency="{report_currency}">')
+    body   = "\n".join(period_lines)
+    return f'{header}\n{body}\n    </quote>'
+
+
+def _append_archive_xml(xml_path: str,
+                        etf_entries: list[dict],
+                        fund_entries: list[dict]) -> None:
+    """把 entry 列表幂等地 append 到 archive XML 中。
+
+    流程:
+      1. 读旧文件得到已有 keys; 过滤掉重复的 entry。
+      2. 若文件不存在, 用 _ARCHIVE_HEADER 作为初始骨架。
+      3. 对需要写的 entry, 分 ticker 聚合, 用正则定位插入点:
+         - 若该 ticker 的 <quote> 节点已存在 -> 在该节点的 </quote> 之前插入新 <week>/<period>
+         - 否则 -> 在 </etf_weekly> 或 </fundamentals> 之前插入一个新 <quote>...</quote> 块
+      4. 用临时文件 + os.replace 原子写入。
+
+    注意: 全程不触碰已有节点内容/格式/注释, 用户手动改动完全保留。
+    """
+    import os
+    existing_etf, existing_period = _read_archive_keys(xml_path)
+    if (("__PARSE_ERROR__", "") in existing_etf
+            or ("__PARSE_ERROR__", "") in existing_period):
+        return  # 读失败时放弃写入, 保护已有文件
+
+    # 过滤已存在的 key
+    etf_todo  = [e for e in etf_entries  if (e["symbol"], e["asof"]) not in existing_etf]
+    fund_todo = [e for e in fund_entries if (e["symbol"], e["asof"]) not in existing_period]
+    if not etf_todo and not fund_todo:
+        print("> archive: no new entries (up to date)", file=sys.stderr)
+        return
+
+    # 读文件内容 (或用初始骨架)
+    # 空文件 / 全空白 的情况也走骨架路径, 与 _read_archive_keys 的处理保持一致
+    txt = ""
+    if os.path.exists(xml_path):
+        with open(xml_path, "r", encoding="utf-8") as f:
+            txt = f.read()
+    if not txt.strip():
+        txt = _ARCHIVE_HEADER
+
+    # ---------- ETF 分节 ----------
+    # 按 symbol 聚合待写的 week
+    etf_by_sym: dict[str, list[dict]] = {}
+    for e in etf_todo:
+        etf_by_sym.setdefault(e["symbol"], []).append(e)
+    for sym, entries in etf_by_sym.items():
+        week_lines = [_format_week_line(e) for e in entries]
+        # 定位 <quote symbol="SYM" ...>...</quote> 块
+        pat = re.compile(
+            rf'(<quote\s+symbol="{re.escape(sym)}"[^>]*>)(.*?)(</quote>)',
+            re.DOTALL,
+        )
+        m = pat.search(txt)
+        if m:
+            # 已有 quote 块: 在 </quote> 之前插入新 week 行.
+            # group(2) 末尾通常是 "...\n    " (前导缩进指向 </quote>), rstrip 掉再
+            # 用统一的 "\n" + 6空格 + line + "\n    " 格式, 保证缩进整齐。
+            inner = m.group(2).rstrip()
+            new_block = (m.group(1) + inner + "\n"
+                         + "\n".join(week_lines) + "\n    " + m.group(3))
+            txt = txt[:m.start()] + new_block + txt[m.end():]
+        else:
+            # 没有该 ticker 的 quote 块: 在 </etf_weekly> 之前插入
+            block = _format_etf_quote_block(sym, entries[0]["market"],
+                                             entries[0]["currency"], week_lines)
+            txt = re.sub(r'(\s*)</etf_weekly>',
+                         r'\n' + block + r'\1</etf_weekly>', txt, count=1)
+
+    # ---------- Fundamentals 分节 ----------
+    fund_by_sym: dict[str, list[dict]] = {}
+    for e in fund_todo:
+        fund_by_sym.setdefault(e["symbol"], []).append(e)
+    for sym, entries in fund_by_sym.items():
+        period_lines = [_format_period_line(e) for e in entries]
+        pat = re.compile(
+            rf'(<quote\s+symbol="{re.escape(sym)}"[^>]*>)(.*?)(</quote>)',
+            re.DOTALL,
+        )
+        # ⚠ fundamentals 和 etf_weekly 都有 <quote>, 要先定位 <fundamentals>...</fundamentals> 片段
+        fm = re.search(r'<fundamentals>(.*?)</fundamentals>', txt, re.DOTALL)
+        if not fm:
+            print(f"  !! archive: <fundamentals> section missing, skip {sym}",
+                  file=sys.stderr)
+            continue
+        fund_section = fm.group(1)
+        m = pat.search(fund_section)
+        if m:
+            inner = m.group(2).rstrip()
+            new_block = (m.group(1) + inner + "\n"
+                         + "\n".join(period_lines) + "\n    " + m.group(3))
+            new_fund_section = fund_section[:m.start()] + new_block + fund_section[m.end():]
+        else:
+            block = _format_fund_quote_block(
+                sym, entries[0]["market"], entries[0]["currency"],
+                entries[0]["report_currency"] or entries[0]["currency"],
+                period_lines,
+            )
+            # 在 </fundamentals> 的内侧末尾插入
+            new_fund_section = fund_section.rstrip() + "\n" + block + "\n  "
+        txt = txt[:fm.start()] + "<fundamentals>" + new_fund_section + "</fundamentals>" + txt[fm.end():]
+
+    # ---------- 原子写入 ----------
+    tmp_path = xml_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(txt)
+    os.replace(tmp_path, xml_path)
+    print(f"> archive: +{len(etf_todo)} ETF week(s), +{len(fund_todo)} period(s) "
+          f"-> {xml_path}", file=sys.stderr)
 
 
 def main() -> int:
@@ -4557,6 +5190,29 @@ def main() -> int:
         _sync_pages(out_path)
     except Exception as e:
         print(f"  !! Pages sync failed: {e}", file=sys.stderr)
+
+    # ----- 更新 ValuationSnapshot.xml (20 年归档, append-only) -----
+    # 核心约束: 已有节点一字不改 (保留用户手动补的 N/A 替换); 幂等 key = (symbol, asof)。
+    # 失败不阻塞主流程, 下周脚本运行时会自动尝试补齐。
+    try:
+        run_date = now.strftime("%Y-%m-%d")
+        xml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 ARCHIVE_XML_FILENAME)
+        etf_entries = _build_etf_week_entries(etf_rows, run_date)
+        fund_entries: list[dict] = []
+        print("\n> Fetching archive fundamentals (quarterly income + balance-sheet)...",
+              file=sys.stderr)
+        for r in us_rows:
+            fund_entries.extend(
+                _build_fundamentals_entries(r.symbol, "US", "USD", r, run_date)
+            )
+        for r in hk_rows:
+            fund_entries.extend(
+                _build_fundamentals_entries(r.symbol, "HK", "HKD", r, run_date)
+            )
+        _append_archive_xml(xml_path, etf_entries, fund_entries)
+    except Exception as e:
+        print(f"  !! archive update failed: {e}", file=sys.stderr)
 
     # 尝试自动用默认浏览器打开（失败也不影响脚本成功退出）
     try:
